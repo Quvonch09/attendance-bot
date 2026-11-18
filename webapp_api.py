@@ -121,7 +121,7 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         raise ValueError("allowed_origin must be one exact origin")
     app = web.Application(client_max_size=MAX_TOTAL_BYTES + 128_000)
     challenges: OrderedDict[str, dict[str, Any]] = OrderedDict()
-    app["challenges"] = challenges
+    static_root = Path(__file__).resolve().parent / "webapp"
 
     def prune() -> None:
         now = clock()
@@ -136,7 +136,9 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
 
     @web.middleware
     async def security_middleware(request: web.Request, handler):
-        origin = request.headers.get("Origin")
+        # Same-origin browser GETs can omit Origin. The isolated 8443 Nginx
+        # block overwrites X-Cue-Origin with its fixed, approved origin.
+        origin = request.headers.get("Origin") or request.headers.get("X-Cue-Origin")
         if request.method == "OPTIONS":
             if not allowed_origin:
                 return web.json_response({"error": "service_unavailable"}, status=503)
@@ -315,9 +317,23 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
             # TemporaryDirectory removes all files on all exit paths.
             created.clear()
 
+    async def index_page(request: web.Request):
+        return web.FileResponse(static_root / "index.html")
+
+    async def static_asset(request: web.Request):
+        asset = request.match_info["asset"]
+        if asset not in {"styles.css", "app.js", "config.js"}:
+            raise web.HTTPNotFound()
+        return web.FileResponse(static_root / asset)
+
+    async def options(request: web.Request):
+        return web.Response(status=204)
+
+    app.router.add_route("GET", "/", index_page)
+    app.router.add_route("GET", "/{asset}", static_asset)
     app.router.add_route("GET", "/api/challenge", challenge)
     app.router.add_route("POST", "/api/attendance", attendance)
-    app.router.add_route("OPTIONS", "/api/{tail:.*}", lambda request: web.Response(status=204))
+    app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
     return app
 
 

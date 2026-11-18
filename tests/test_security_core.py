@@ -107,6 +107,44 @@ class SecurityCoreTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_same_origin_static_and_api_routes_require_trusted_origin(self):
+        async def scenario():
+            token, now = "54321:origin-test-token", int(time.time())
+            origin = "https://api.orivasmarket.uz:8443"
+            raw = telegram_init_data(token, now)
+            app = build_api_app(
+                token=token, allowed_origin=origin,
+                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
+                get_event=lambda uid, kind: None, get_explanation=lambda uid: True,
+                add_event=lambda *args: None, compare_face=lambda *args: True,
+                notify_admins=lambda text: None, format_name=lambda user: "Test",
+                late_minutes=lambda value: 0, hhmm=lambda value: "08:00",
+                now_local=lambda: datetime(2026, 1, 1, 8, 0),
+                distance_from_office=lambda lat, lon: 0, clock=lambda: now,
+                liveness_check=lambda paths: True,
+            )
+            async with TestClient(TestServer(app)) as client:
+                trusted = {"X-Cue-Origin": origin}
+                page = await client.get("/", headers=trusted)
+                self.assertEqual(page.status, 200)
+                self.assertIn("Davomat", await page.text())
+                asset = await client.get("/config.js", headers=trusted)
+                self.assertEqual(asset.status, 200)
+                self.assertIn("window.location.origin", await asset.text())
+                headers = {**trusted, "X-Telegram-Init-Data": raw}
+                challenge = await client.get("/api/challenge?action=checkin", headers=headers)
+                self.assertEqual(challenge.status, 200)
+                wrong_origin = await client.get(
+                    "/api/challenge?action=checkin",
+                    headers={**headers, "Origin": "https://evil.example"},
+                )
+                self.assertEqual(wrong_origin.status, 403)
+                missing_proxy_origin = await client.get("/", headers={})
+                self.assertEqual(missing_proxy_origin.status, 403)
+
+        asyncio.run(scenario())
+
 
 if __name__ == "__main__":
     unittest.main()

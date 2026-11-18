@@ -10,13 +10,13 @@ Eslatmalar: 09:00 kelish, 12:00 tushlikka chiqish, 14:30 ishga qaytish va 18:00 
 
 Web App API yoqilgach, to‘rtta amalning har biri uchun Telegram imzosi, tasdiqlangan xodim, 300 metr geofence, bir martalik topshiriq, kamera kadrlari va ro‘yxatdagi yuz bilan moslik tekshiriladi. Ketma-ketlik: kelish → tushlikka chiqish → tushlikdan qaytish → ishdan chiqish. Har bir muvaffaqiyatli qayd admin/nazoratchilarga ism-vaqt bilan yuboriladi. Yuzni avtomatik solishtirish uchun DeepFace ishlatiladi.
 
-## Web App va hozirgi holat
+## Web App va server
 
-`webapp/` katalogida Telegram Mini App uchun statik frontend bor. Server xom `Telegram.WebApp.initData` imzosini bot tokeni bilan tekshiradi; `initDataUnsafe` autentifikatsiyaga ishlatilmaydi. Mini App reply-keyboard `KeyboardButton(web_app)` orqali ochilsa `initData` bo‘sh bo‘lishi mumkin, shuning uchun bot API rejimida Web App inline tugma orqali ochiladi.
+`webapp/` katalogida Telegram Mini App uchun statik frontend bor. U `https://api.orivasmarket.uz:8443/` manzilida bot API bilan bir xil origin ostida ishlaydi. Bot Web App’ni inline HTTPS tugma orqali ochadi; server raw `Telegram.WebApp.initData` imzosini bot tokeni bilan tekshiradi. `initDataUnsafe` autentifikatsiyaga ishlatilmaydi.
 
-Bot serveriga faqat davomat API uchun alohida Nginx HTTPS tinglovchisi `https://169.58.215.170:8443/api/` o‘rnatilgan. U faqat loopback’dagi `127.0.0.1:8765` bot API manziliga yo‘naltiriladi; boshqa sayt va xizmatlarga tegilmagan. Hozir `WEBAPP_API_ENABLED=0`; `WEBAPP_URL` va `WEBAPP_ORIGIN` sozlanmagan, shu sabab API ishlamaydi va to‘rtta amal uchun selfi tekshiruvi xodimlarga hali yoqilmagan.
+`api.orivasmarket.uz` manzili `169.58.215.170` server IP manziliga yo‘naltirilgan va unga mos TLS sertifikati serverda mavjud. Sertifikat faqat attendance uchun yangi 8443 Nginx blokida ishlatiladi; mavjud 443 virtual xost, DNS, boshqa sayt va xizmatlarga o‘zgartirish kiritilmaydi. Nginx barcha so‘rovlarni faqat `127.0.0.1:8765` loopback manzilidagi davomat botiga uzatadi.
 
-Vercel Hobby reja shaxsiy yoki notijoriy foydalanish bilan cheklangan, shuning uchun ish joyidagi davomat botini bu rejaga joylashtirmaymiz: https://vercel.com/legal/terms . Mos HTTPS hosting va frontendning aniq manzili tanlanmaguncha frontend/API ulanmaydi; pullik xizmat uchun rozilik olinmagan.
+Production API sozlanganda `WEBAPP_URL=https://api.orivasmarket.uz:8443/` va `WEBAPP_ORIGIN=https://api.orivasmarket.uz:8443` qiymatlari aniq mos bo‘lishi kerak. `WEBAPP_API_ENABLED=0` xavfsiz boshlang‘ich sozlama; TLS, inline URL, frontend va API smoke-test muvaffaqiyatli bo‘lgach uni `1` ga o‘zgartiring. Vercel Hobby rejasini bu ish joyi xizmatida ishlatmaymiz: https://vercel.com/legal/terms .
 
 ## O‘rnatish
 
@@ -31,7 +31,7 @@ python tests/test_security_core.py -v
 python bot.py
 ```
 
-`WEBAPP_API_ENABLED=0` xavfsiz boshlang‘ich sozlama. API’ni faqat mos, ommaga ochiq HTTPS frontend tayyor bo‘lgach yoqing; `WEBAPP_URL` va `WEBAPP_ORIGIN` aniq manzil bilan mos bo‘lishi kerak. `.env`, bot tokeni, `data/` ichidagi yuz rasmlari va SQLite faylini GitHub’ga yubormang.
+`.env`, bot tokeni, `data/` ichidagi yuz rasmlari va SQLite faylini GitHub’ga yubormang.
 
 ## GitHub Actions deploy
 
@@ -46,5 +46,5 @@ Haar yuz topish va kadrlar orasidagi harakat belgisi oddiy prototip tekshiruvi, 
 - `bot.py` — Telegram bot, rol/menu, eslatma va hisobot.
 - `webapp_api.py` — Telegram imzosi, bir martalik topshiriq, yuz/GPS va davomat API.
 - `webapp/` — to‘rtta tasdiqlashni qamrab olgan statik frontend.
-- `tests/test_security_core.py` — HMAC, challenge takrori va amal ketma-ketligi testlari.
+- `tests/test_security_core.py` — HMAC, challenge takrori, same-origin va amal ketma-ketligi testlari.
 - `deploy/` — faqat bot uchun systemd, Nginx va deploy sozlamalari.

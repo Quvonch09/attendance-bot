@@ -8,7 +8,7 @@ if [[ ! "$RELEASE_ID" =~ ^[0-9a-f]{40}$ ]]; then
   exit 2
 fi
 RELEASE_DIR="$BASE_DIR/releases/$RELEASE_ID"
-if [[ ! -f "$RELEASE_DIR/bot.py" || ! -f "$RELEASE_DIR/webapp_api.py" || ! -f "$RELEASE_DIR/requirements.txt" ]]; then
+if [[ ! -f "$RELEASE_DIR/bot.py" || ! -f "$RELEASE_DIR/webapp_api.py" || ! -f "$RELEASE_DIR/requirements.txt" || ! -f "$RELEASE_DIR/webapp/index.html" ]]; then
   echo "Release files are missing from $RELEASE_DIR."
   exit 2
 fi
