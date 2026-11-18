@@ -1,0 +1,66 @@
+name: Deploy attendance bot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cue-attendance-bot-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DEPLOY_HOST: 169.58.215.170
+      DEPLOY_USER: cue-attendance-bot
+      DEPLOY_DIR: /opt/cue-attendance-bot
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+    steps:
+      - name: Check out private repository
+        uses: actions/checkout@v4
+
+      - name: Check whether deployment key is configured
+        id: readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEPLOY_SSH_KEY" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Deployment skipped until the repository secret DEPLOY_SSH_KEY is configured."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure pinned SSH access
+        if: steps.readiness.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s deploy/known_hosts
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          install -m 600 deploy/known_hosts "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+
+      - name: Upload release and deploy
+        if: steps.readiness.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          release_dir="${DEPLOY_DIR}/releases/${GITHUB_SHA}"
+          ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes "$target" "mkdir -p '${release_dir}/deploy'"
+          scp -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            bot.py requirements.txt README.md "$target:${release_dir}/"
+          scp -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            deploy/deploy.sh "$target:${release_dir}/deploy/"
+          printf '%s\n' "$BOT_TOKEN" | ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$target" "bash '${release_dir}/deploy/deploy.sh' '${GITHUB_SHA}'"
