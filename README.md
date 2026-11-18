@@ -29,7 +29,7 @@ Bot serverda doimiy ishlashi kerak; jarayon to‘xtasa, eslatmalar vaqtida yubor
 
 Repo xususiy bo‘lishi kerak. Bir martalik server tayyorlash `deploy/bootstrap-server.sh` orqali alohida `cue-attendance-bot` akkaunti, faqat bot uchun katalog/service va cheklangan restart ruxsatini o‘rnatadi; mavjud loyiha va servicelarga tegmaydi. GitHub Actions faqat shu akkaunt bilan `/opt/cue-attendance-bot/releases/` ichiga kod yuboradi va bot servisinigina restart qiladi.
 
-Repo sozlamalaridagi Actions variables: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KNOWN_HOSTS`. Actions secrets: `DEPLOY_SSH_KEY`, `BOT_TOKEN`. Deploy SSH kaliti faqat bot akkauntida ishlaydi; host key qat’iy tekshiriladi, runner uni avtomatik qabul qilmaydi. `BOT_TOKEN` bo‘lmasa, CI kodni alohida papkaga joylaydi, ammo servisni yoqmaydi. Yangi, avvalgi oshkor bo‘lgan token emas, yangi Telegram tokenini `BOT_TOKEN` secret’iga xavfsiz qo‘shgandan keyin keyingi deploy servisni faollashtiradi.
+Repo Actions secret’lari: `DEPLOY_SSH_KEY` va `BOT_TOKEN`. Server manzili, deploy akkaunti va host key repo ichida pin qilingan; runner server key’ni avtomatik qabul qilmaydi. `BOT_TOKEN` bo‘lmasa, CI kodni alohida release papkasiga joylaydi, lekin service’ni ishga tushirmaydi. Eski oshkor bo‘lgan token emas, yangi Telegram tokenini `BOT_TOKEN` secret’iga xavfsiz qo‘shgandan keyingi deploy service’ni ishga tushiradi.
 
 ## Xodim uchun oqim
 
