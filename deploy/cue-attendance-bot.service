@@ -1,0 +1,36 @@
+[Unit]
+Description=Cue Attendance Telegram Bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=cue-attendance-bot
+Group=cue-attendance-bot
+WorkingDirectory=/opt/cue-attendance-bot/current
+EnvironmentFile=/opt/cue-attendance-bot/.env
+Environment=HOME=/var/lib/cue-attendance-bot
+Environment=DATA_DIR=/var/lib/cue-attendance-bot/data
+StateDirectory=cue-attendance-bot
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/opt/cue-attendance-bot/venv/bin/python /opt/cue-attendance-bot/current/bot.py
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/cue-attendance-bot
+
+[Install]
+WantedBy=multi-user.target

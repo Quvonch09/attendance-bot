@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+data/
+/deploy/server_known_hosts
+*deploy_key*
