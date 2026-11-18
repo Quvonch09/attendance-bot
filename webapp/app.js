@@ -7,13 +7,15 @@
   if (user && user.first_name) $('greeting').textContent = `Xush kelibsiz, ${user.first_name}`;
   const api = String(window.ATTENDANCE_API_BASE || '').trim().replace(/\/$/, '');
   let stream = null, coords = null, challenge = null, busy = false, stopped = false;
+  const action = () => $('action-select').value;
+  const labels = {checkin:'kelish', lunch_out:'tushlikka chiqish', lunch_in:'tushlikdan qaytish', checkout:'ishdan chiqish'};
   const setNotice = (text, kind = '') => { const n=$('notice'); n.textContent=text; n.className=`notice ${kind}`.trim(); };
   const markDone = (id) => $(id).classList.add('done');
   const headers = () => ({'X-Telegram-Init-Data': initData});
   const apiError = (code, status) => ({
     unauthorized:'Telegram tekshiruvi o‘tmadi. Web App-ni bot ichidan qayta oching.',
     not_approved:'Ro‘yxatdagi yuzingiz hali admin yoki nazoratchi tomonidan tasdiqlanmagan.',
-    already_checked_in:'Bugungi kelishingiz avval qayd etilgan.',
+    already_checked_in:'Bugungi kelishingiz avval qayd etilgan.', duplicate_action:'Bu amal bugun allaqachon qayd etilgan.', sequence_invalid:'Bu amal davomat ketma-ketligiga mos kelmaydi.', invalid_action:'Noto‘g‘ri davomat amali.',
     late_reason_required:'09:30 dan keyin kelayotgan bo‘lsangiz, bot chatiga kechikish sababini matn yoki ovozda yuboring, keyin qayta urinib ko‘ring.',
     outside_office_radius:'Siz ofisdan 300 metr radiusdan tashqaridasiz.',
     face_check_failed:'Yuz yoki harakat tekshiruvi o‘tmadi. Kameraga aniq qarab, topshiriqni bajaring va qayta urinib ko‘ring.',
@@ -41,7 +43,7 @@
       if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw Error('Kamera ishlashi uchun HTTPS va mos brauzer kerak.');
       stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'user'},width:{ideal:640},height:{ideal:480}}});
       $('video').srcObject=stream;$('camera-placeholder').hidden=true;$('video-wrap').classList.add('ready');$('camera-status').textContent='Old kamera tayyor';markDone('step-camera');$('stop-button').hidden=false;
-      const res=await fetch(`${api}/api/challenge`,{method:'GET',headers:headers()});let challengeData={};try{challengeData=await res.json();}catch(_){ }
+      const res=await fetch(`${api}/api/challenge?action=${encodeURIComponent(action())}`,{method:'GET',headers:headers()});let challengeData={};try{challengeData=await res.json();}catch(_){ }
       if(!res.ok)throw Error(apiError(challengeData.error,res.status));
       challenge=challengeData;if(!challenge.challenge_id||!challenge.instruction)throw Error('Server topshiriq javobida kerakli ma’lumotlar yo‘q.');
       $('instruction').textContent=challenge.instruction;$('motion-status').textContent='Topshiriq tayyor · yuzni avtomatik solishtirish va oddiy harakat tekshiruvi';
@@ -61,12 +63,13 @@
         if(i<4)await new Promise(resolve=>setTimeout(resolve,600));
       }
       if(stopped)throw Error('Tekshiruv to‘xtatildi.');$('capture-status').textContent='Serverga yuborilmoqda…';setNotice('Kadrlar serverga yuborilmoqda…');
-      const form=new FormData();form.append('challenge_id',challenge.challenge_id);form.append('latitude',String(coords.latitude));form.append('longitude',String(coords.longitude));frames.forEach((blob,i)=>form.append('frames',blob,`frame-${i+1}.jpg`));
-      const res=await fetch(`${api}/api/checkin`,{method:'POST',headers:headers(),body:form});let data={};try{data=await res.json();}catch(_){ }
+      const form=new FormData();form.append('challenge_id',challenge.challenge_id);form.append('action',action());form.append('latitude',String(coords.latitude));form.append('longitude',String(coords.longitude));frames.forEach((blob,i)=>form.append('frames',blob,`frame-${i+1}.jpg`));
+      const res=await fetch(`${api}/api/attendance`,{method:'POST',headers:headers(),body:form});let data={};try{data=await res.json();}catch(_){ }
       if(!res.ok)throw Error(apiError(data.error||data.detail||data.message,res.status));
-      stopCamera();busy=false;markDone('step-motion');$('capture-status').textContent='Tekshiruv yakunlandi';$('progress').style.width='100%';$('capture-button').hidden=true;$('stop-button').hidden=true;$('retry-button').hidden=true;setNotice(data.message||'Davomat muvaffaqiyatli qayd etildi.','success');
+      stopCamera();busy=false;markDone('step-motion');$('capture-status').textContent='Tekshiruv yakunlandi';$('progress').style.width='100%';$('capture-button').hidden=true;$('stop-button').hidden=true;$('retry-button').hidden=true;setNotice(data.message||`${labels[action()].charAt(0).toUpperCase()+labels[action()].slice(1)} muvaffaqiyatli qayd etildi.`,'success');
     }catch(e){if(stopped){$('capture-count').textContent='0 / 5';$('capture-status').textContent='5 ta kadr olinadi';$('progress').style.width='0';}busy=false;$('capture-button').hidden=true;$('retry-button').hidden=false;$('stop-button').hidden=true;setNotice(e.message||'Kadrlarni olishda xatolik.','error');}
   }
+  $('action-select').addEventListener('change',()=>{challenge=null;coords=null;stopCamera();$('start-button').hidden=false;$('start-button').disabled=false;$('capture-button').hidden=true;$('retry-button').hidden=true;setNotice(`${labels[action()]} uchun GPS, yuz mosligi va bir martalik harakat tekshiruvi bajariladi.`);});
   $('start-button').addEventListener('click',start);$('capture-button').addEventListener('click',capture);
   $('stop-button').addEventListener('click',()=>{stopped=true;stopCamera();busy=false;$('capture-button').hidden=true;$('start-button').hidden=false;$('start-button').disabled=false;$('retry-button').hidden=true;setNotice('Tekshiruv to‘xtatildi. Qayta boshlashingiz mumkin.');});
   $('retry-button').addEventListener('click',()=>{challenge=null;coords=null;$('capture-count').textContent='0 / 5';$('capture-status').textContent='5 ta kadr olinadi';$('progress').style.width='0';$('retry-button').hidden=true;$('start-button').hidden=false;$('start-button').disabled=false;setNotice('Qayta urinishga tayyor.');});

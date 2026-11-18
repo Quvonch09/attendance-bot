@@ -192,6 +192,21 @@ def get_event(uid: int, kind: str, work_day: str | None = None):
         ).fetchone()
 
 
+def add_webapp_event(uid: int, kind: str, lat=None, lon=None, distance=None, face_ok=1, live_ok=1):
+    """Atomically enforce the attendance action sequence and persist verified event."""
+    order = {"checkin": 0, "lunch_out": 1, "lunch_in": 2, "checkout": 3}
+    if kind not in order:
+        raise ValueError("invalid attendance action")
+    with db_connect() as con:
+        con.execute("BEGIN IMMEDIATE")
+        today = day_key()
+        if con.execute("SELECT 1 FROM events WHERE telegram_id=? AND work_day=? AND kind=?", (uid, today, kind)).fetchone():
+            raise sqlite3.IntegrityError("duplicate action")
+        previous = ["checkin", "lunch_out", "lunch_in", "checkout"][:order[kind]]
+        if any(not con.execute("SELECT 1 FROM events WHERE telegram_id=? AND work_day=? AND kind=?", (uid, today, item)).fetchone() for item in previous):
+            raise ValueError("attendance sequence invalid")
+        con.execute("INSERT INTO events(telegram_id,work_day,kind,happened_at,latitude,longitude,distance_m,face_ok,liveness_ok) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (uid, today, kind, stamp(), lat, lon, distance, face_ok, live_ok))
 def add_event(uid: int, kind: str, lat=None, lon=None, distance=None, face_ok=0, live_ok=0):
     with db_connect() as con:
         con.execute(
@@ -235,12 +250,25 @@ def main_keyboard(uid: int | None = None):
             [KeyboardButton(text="🧑‍💼 Yuz tasdiqlari")],
         ])
     if WEBAPP_URL:
-        keyboard.append([KeyboardButton(text="🌐 Davomat web-ilovasi", web_app=WebAppInfo(url=WEBAPP_URL))])
+        keyboard.append([KeyboardButton(text="🌐 Davomat web-ilovasi")])
     return ReplyKeyboardMarkup(keyboard=keyboard, is_persistent=True, resize_keyboard=True)
 
 
 def menu_for(message: Message):
     return main_keyboard(message.from_user.id)
+
+
+async def send_webapp_prompt(message: Message, action: str):
+    if not WEBAPP_API_ENABLED or not WEBAPP_URL:
+        await message.answer("Davomat Web App hali xavfsiz HTTPS/API manzili bilan sozlanmagan. Hozircha botning mavjud tugmalaridan foydalaning.")
+        return
+    if action == "checkin" and now_local().time() >= time(9, 30) and not get_explanation(message.from_user.id):
+        set_pending(message.from_user.id, "webapp_late_reason", "reason")
+        await message.answer("09:30 dan keyin kelayotganingiz uchun avval kechikish sababini matn yoki ovozli xabar bilan yuboring. Izoh nazoratchilarga yuboriladi; so‘ng kelish tugmasini qayta bosing.")
+        return
+    labels = {"checkin": "✅ Ishga kelishni", "lunch_out": "🍽 Tushlikka chiqishni", "lunch_in": "🔙 Tushlikdan qaytishni", "checkout": "🏁 Ishdan chiqishni"}
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"{labels[action]} tasdiqlash", web_app=WebAppInfo(url=WEBAPP_URL))]])
+    await message.answer(f"{labels[action]} yuz mosligi, bir martalik harakat topshirig‘i va GPS (barcha amallar uchun majburiy) bilan bajaring.", reply_markup=keyboard)
 
 
 def consent_keyboard():
@@ -508,6 +536,9 @@ async def send_face_review(bot: Bot, user_row):
 
 async def start_checkin(bot: Bot, message: Message):
     uid = message.from_user.id
+    if WEBAPP_API_ENABLED:
+        await send_webapp_prompt(message, "checkin")
+        return
     if not await require_approved(message):
         return
     if parse_day_event(uid, "checkin"):
@@ -528,6 +559,9 @@ async def start_checkin(bot: Bot, message: Message):
 
 async def begin_lunch_event(message: Message, kind: str):
     uid = message.from_user.id
+    if WEBAPP_API_ENABLED:
+        await send_webapp_prompt(message, kind)
+        return
     if not await require_approved(message):
         return
     if parse_day_event(uid, kind):
@@ -546,6 +580,9 @@ async def begin_lunch_event(message: Message, kind: str):
 
 async def begin_checkout(message: Message):
     uid = message.from_user.id
+    if WEBAPP_API_ENABLED:
+        await send_webapp_prompt(message, "checkout")
+        return
     if not await require_approved(message):
         return
     if parse_day_event(uid, "checkout"):
@@ -798,6 +835,9 @@ async def main():
     @dp.message(F.location)
     async def on_location(message: Message):
         uid = message.from_user.id
+        if WEBAPP_API_ENABLED:
+            await message.answer("Joylashuv faqat davomat Web App ichidagi yuz tekshiruvi bilan qabul qilinadi.", reply_markup=main_keyboard(uid))
+            return
         state = get_pending(uid)
         if not state:
             existing = get_any_user(uid)
@@ -845,6 +885,9 @@ async def main():
     @dp.message(F.video)
     async def on_video(message: Message):
         uid = message.from_user.id
+        if WEBAPP_API_ENABLED:
+            await message.answer("Video-selfi faqat davomat Web App ichida yuborilgan topshiriq uchun qabul qilinadi.", reply_markup=main_keyboard(uid))
+            return
         state = get_pending(uid)
         if not state or state["task"] != "checkin" or state["step"] != "video":
             if not await require_approved(message):
@@ -925,6 +968,12 @@ async def main():
     @dp.message(F.text == "✅ Ishga keldim")
     async def arrival_button(message: Message):
         await start_checkin(message.bot, message)
+    @dp.message(F.text == "🌐 Davomat web-ilovasi")
+    async def webapp_button(message: Message):
+        if WEBAPP_URL and WEBAPP_API_ENABLED:
+            await send_webapp_prompt(message, "checkin")
+        else:
+            await message.answer("Davomat Web App hali sozlanmagan. Hozircha botning mavjud tugmalaridan foydalaning.", reply_markup=main_keyboard(message.from_user.id))
 
     @dp.message(F.text.in_({"🍽 Tushlikka", "🍽 Tushlikka chiqyapman"}))
     async def lunch_out_button(message: Message):
@@ -1025,7 +1074,7 @@ async def main():
                 get_user=get_user,
                 get_event=get_event,
                 get_explanation=get_explanation,
-                add_event=add_event,
+                add_event=add_webapp_event,
                 compare_face=compare_face,
                 notify_admins=lambda text: notify_admins(bot, text),
                 format_name=format_name,

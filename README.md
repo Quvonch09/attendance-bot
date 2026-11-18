@@ -1,41 +1,50 @@
 # Telegram davomat boti
 
-Bot xodimlarning ishga kelish-ketishini Telegram orqali qayd etadi. Oddiy xodim, admin va nazoratchi huquqlari bitta akkauntda birga bo'lishi mumkin. Nazoratchi ham xodim sifatida davomat belgilay oladi.
+Bot xodimlarning kelish-ketishini Telegram orqali qayd etadi. Oddiy xodim, admin va nazoratchi huquqlari bitta akkauntda birga bo‘lishi mumkin. Telegram ID `8048583227` admin/nazoratchi va xodim sifatida ishlaydi; `1922170479` mavjud admin huquqini saqlaydi.
 
 ## Ish tartibi
 
-Ish joyi Innova maktabining xaritadagi nuqtasi (`38.8557873, 65.8002788`), ruxsat etilgan radius 300 metr, vaqt zonasi `Asia/Tashkent`. Adminlar Telegram ID `8048583227` va `1922170479`; `8048583227` nazoratchi huquqiga ham ega. Xodim `/start` orqali ro'yxatdan o'tadi, yuz ma'lumotidan foydalanishga rozilik beradi, ism-familiyasini va birinchi selfisini yuboradi. Admin yoki nazoratchilardan biri ro'yxatdagi suratni bir marta tasdiqlaydi. Xodim o'z suratini o'zi tasdiqlay olmaydi; boshqa nazoratchi tasdiqlashi kerak.
+Ish joyi Innova maktabi koordinatasi (`38.8557873, 65.8002788`), geofence radiusi 300 metr, vaqt zonasi `Asia/Tashkent`. Xodim `/start` orqali ro‘yxatdan o‘tadi, biometrik suratdan foydalanishga rozilik beradi, ism-familiyasini va selfisini yuboradi. Admin yoki nazoratchilardan biri ro‘yxatdagi yuz suratini bir marta ko‘rib tasdiqlaydi. Xodim o‘z suratini o‘zi tasdiqlay olmaydi.
 
-09:00 da ishga kelish eslatmasi yuboriladi. 09:30 dan keyin xodim Telegram chatga kechikish sababini matn yoki ovozda yuborishi shart. 12:00 da tushlikka chiqish, 14:30 da ishga qaytish, 18:00 da ishdan chiqish tugmalari ishlatiladi. 12:00 va 14:30 tasdiqlari 10 daqiqada kelmasa, nazoratchiga ogohlantirish yuboriladi; 18:15 da kunlik hisobot keladi. Har bir qaydda nazoratchilarga xodimning ismi va vaqti yuboriladi. Pastki doimiy menyuda xodim va nazoratchi tugmalari ko'rinadi.
+Eslatmalar: 09:00 kelish, 12:00 tushlikka chiqish, 14:30 ishga qaytish va 18:00 ishdan chiqish. Tushlikka chiqish yoki qaytish belgilanmasa, 10 daqiqada nazoratchiga xabar boradi; 18:15 da kunlik hisobot yuboriladi. Xodim 09:30 dan keyin kelsa, Telegram chatga kechikish sababini matn yoki ovozda yuborishi kerak; matn va ovoz tegishli nazoratchilarga uzatiladi.
 
-## Telegram Web App va API
+Web App API yoqilgach, to‘rtta amalning har biri uchun Telegram imzosi, tasdiqlangan xodim, 300 metr geofence, bir martalik topshiriq, kamera kadrlari va ro‘yxatdagi yuz bilan moslik tekshiriladi. Ketma-ketlik: kelish → tushlikka chiqish → tushlikdan qaytish → ishdan chiqish. Har bir muvaffaqiyatli qayd admin/nazoratchilarga ism-vaqt bilan yuboriladi. Yuzni avtomatik solishtirish uchun DeepFace ishlatiladi.
 
-`webapp/` katalogidagi sahifa Vercel'ga joylanadigan statik frontend. Kamera va joylashuv faqat HTTPS orqali Telegram ilovasi ichida ochilganda ishlaydi. Frontend Telegram'dan olingan raw `Telegram.WebApp.initData` qiymatini serverga yuboradi. Server bot tokeni bilan HMAC imzosini va ma'lumot vaqtini tekshiradi; `initDataUnsafe` login uchun ishlatilmaydi.
+## Web App va hozirgi holat
 
-`WEBAPP_API_ENABLED=1` bo'lsa, bot API faqat `127.0.0.1:8765` manzilida ishlaydi. Alohida HTTPS proxy 8443 portdagi `/api/` so'rovlarini shu API'ga uzatadi va faqat Web App'ning aniq HTTPS manzilini qabul qiladi. API'ni boshqa manzilga bevosita ochmang. Vercel va API manzillari tayyor bo'lgach `webapp/config.js` hamda server `.env` sozlanadi. URL'lar yo'q bo'lsa API'ni yoqmang.
+`webapp/` katalogida Telegram Mini App uchun statik frontend bor. Server xom `Telegram.WebApp.initData` imzosini bot tokeni bilan tekshiradi; `initDataUnsafe` autentifikatsiyaga ishlatilmaydi. Mini App reply-keyboard `KeyboardButton(web_app)` orqali ochilsa `initData` bo‘sh bo‘lishi mumkin, shuning uchun bot API rejimida Web App inline tugma orqali ochiladi.
 
-09:30 dan keyingi Web App check-in uchun Telegram chatga kechikish izohi oldin yuborilgan bo'lishi shart. Selfie kadrlari vaqtinchalik faylda tekshiriladi va keyin o'chiriladi. Birinchi yuz surati va davomat SQLite bazasi `DATA_DIR` ichida saqlanadi.
+Bot serveriga faqat davomat API uchun alohida Nginx HTTPS tinglovchisi `https://169.58.215.170:8443/api/` o‘rnatilgan. U faqat loopback’dagi `127.0.0.1:8765` bot API manziliga yo‘naltiriladi; boshqa sayt va xizmatlarga tegilmagan. Hozir `WEBAPP_API_ENABLED=0`; `WEBAPP_URL` va `WEBAPP_ORIGIN` sozlanmagan, shu sabab API ishlamaydi va to‘rtta amal uchun selfi tekshiruvi xodimlarga hali yoqilmagan.
 
-## Lokal ishga tushirish
+Vercel Hobby reja shaxsiy yoki notijoriy foydalanish bilan cheklangan, shuning uchun ish joyidagi davomat botini bu rejaga joylashtirmaymiz: https://vercel.com/legal/terms . Mos HTTPS hosting va frontendning aniq manzili tanlanmaguncha frontend/API ulanmaydi; pullik xizmat uchun rozilik olinmagan.
 
-Python 3.11 yoki undan yangi versiya kerak.
+## O‘rnatish
+
+Python 3.11 yoki yangi versiya kerak.
 
 ```bash
 python -m pip install -r requirements.txt
 cp .env.example .env
 # .env ichiga BOT_TOKEN va kerakli sozlamalarni kiriting
 python -m py_compile bot.py webapp_api.py
+python tests/test_security_core.py -v
 python bot.py
 ```
 
-`WEBAPP_API_ENABLED=0` xavfsiz boshlang'ich sozlama. API'ni faqat frontend HTTPS manzili va Nginx proxy tayyor bo'lgach `1` qiling. `.env`, bot tokeni, `data/` ichidagi yuz rasmlari va SQLite faylini GitHub'ga yubormang.
+`WEBAPP_API_ENABLED=0` xavfsiz boshlang‘ich sozlama. API’ni faqat mos, ommaga ochiq HTTPS frontend tayyor bo‘lgach yoqing; `WEBAPP_URL` va `WEBAPP_ORIGIN` aniq manzil bilan mos bo‘lishi kerak. `.env`, bot tokeni, `data/` ichidagi yuz rasmlari va SQLite faylini GitHub’ga yubormang.
 
-## GitHub orqali yangilash
+## GitHub Actions deploy
 
-Private repository'dagi GitHub Actions faqat alohida `cue-attendance-bot` foydalanuvchisi, `/opt/cue-attendance-bot/releases/` katalogi va `cue-attendance-bot.service` ni yangilaydi. Boshqa loyiha va xizmatlarga tegmaydi. Actions faqat `DEPLOY_SSH_KEY` secretidan foydalanadi; bot tokeni GitHub'ga yuborilmaydi va serverdagi himoyalangan `.env` faylida qoladi. Kod serverga joylanganining o'zi Vercel yoki HTTPS proxy tayyor degani emas; ularni alohida sozlab tekshirish kerak.
+GitHub Actions avval testlarni bajaradi. Testlar muvaffaqiyatli bo‘lgach, alohida `cue-attendance-bot` foydalanuvchisi, `/opt/cue-attendance-bot/releases/` katalogi va `cue-attendance-bot.service` yangilanadi. Boshqa loyiha yoki xizmatlarga tegilmaydi. Avtomatik server deploy uchun repository secret `DEPLOY_SSH_KEY` kerak; secret bo‘lmasa testlar ishlaydi, deploy esa o‘tkazib yuboriladi. Bot tokeni faqat serverdagi himoyalangan `.env` faylida qoladi.
 
-## Yuz va joylashuv bo'yicha cheklovlar
+## Biometrik cheklovlar
 
-DeepFace har kungi yuzni birinchi ro'yxat surati bilan avtomatik solishtiradi. Haar yuz topish va bir nechta kadrdagi harakat signali oddiy prototip tekshiruvidir, sertifikatlangan liveness yoki anti-spoof tizimi emas. Soxta GPS yoki ekrandagi video bilan aldash xavfi qoladi; natijani maosh yoki intizomiy qarorning yagona dalili qilmang. Ish boshlashdan oldin rozilik, saqlash muddati, ma'lumotni kim ko'rishi, o'chirish va zaxira nusxa qoidalarini belgilang.
+Haar yuz topish va kadrlar orasidagi harakat belgisi oddiy prototip tekshiruvi, sertifikatlangan tiriklik yoki soxtalashtirishga qarshi tizim emas. Soxta GPS yoki ekrandagi video bilan aldash xavfi qoladi; davomat natijasini maosh yoki intizomiy qarorning yagona dalili qilmang. Ish boshlashdan oldin rozilik, saqlash muddati, ma’lumotni kim ko‘rishi, o‘chirish va zaxira nusxa qoidalarini belgilang.
 
-Fayllar: `bot.py` — Telegram bot, menyu, eslatma va hisobot; `webapp_api.py` — Telegram initData tekshiruvi va davomat API; `webapp/` — Vercel frontend; `deploy/` — alohida xizmat va deploy sozlamalari.
+## Fayllar
+
+- `bot.py` — Telegram bot, rol/menu, eslatma va hisobot.
+- `webapp_api.py` — Telegram imzosi, bir martalik topshiriq, yuz/GPS va davomat API.
+- `webapp/` — to‘rtta tasdiqlashni qamrab olgan statik frontend.
+- `tests/test_security_core.py` — HMAC, challenge takrori va amal ketma-ketligi testlari.
+- `deploy/` — faqat bot uchun systemd, Nginx va deploy sozlamalari.
