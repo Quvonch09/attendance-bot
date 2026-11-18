@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
@@ -23,6 +24,7 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    WebAppInfo,
 )
 from dotenv import load_dotenv
 
@@ -33,6 +35,13 @@ LOG = logging.getLogger("attendance-bot")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "8048583227,1922170479").split(",") if x.strip()}
+CONTROLLER_IDS = {int(x.strip()) for x in os.getenv("CONTROLLER_IDS", "8048583227").split(",") if x.strip()}
+REVIEWER_IDS = ADMIN_IDS | CONTROLLER_IDS
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
+WEBAPP_ORIGIN = os.getenv("WEBAPP_ORIGIN", "").strip().rstrip("/")
+WEBAPP_API_ENABLED = os.getenv("WEBAPP_API_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+WEBAPP_API_HOST = os.getenv("WEBAPP_API_HOST", "127.0.0.1").strip()
+WEBAPP_API_PORT = int(os.getenv("WEBAPP_API_PORT", "8765"))
 OFFICE_LAT = float(os.getenv("OFFICE_LAT", "38.8557873"))
 OFFICE_LON = float(os.getenv("OFFICE_LON", "65.8002788"))
 GEOFENCE_METERS = float(os.getenv("GEOFENCE_METERS", "300"))
@@ -214,16 +223,24 @@ def distance_from_office(lat: float, lon: float) -> float:
     return haversine_m(lat, lon, OFFICE_LAT, OFFICE_LON)
 
 
-def main_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="✅ Ishga keldim")],
-            [KeyboardButton(text="🍽 Tushlikka chiqyapman")],
-            [KeyboardButton(text="🔙 Tushlikdan qaytdim")],
-            [KeyboardButton(text="🏁 Ishdan chiqdim")],
-        ],
-        resize_keyboard=True,
-    )
+def main_keyboard(uid: int | None = None):
+    keyboard = [
+        [KeyboardButton(text="✅ Ishga keldim")],
+        [KeyboardButton(text="🍽 Tushlikka"), KeyboardButton(text="🔙 Tushlikdan qaytdim")],
+        [KeyboardButton(text="🏁 Ishdan chiqdim")],
+    ]
+    if uid is not None and uid in REVIEWER_IDS:
+        keyboard.extend([
+            [KeyboardButton(text="📊 Bugungi hisobot"), KeyboardButton(text="📍 Jonli holat")],
+            [KeyboardButton(text="🧑‍💼 Yuz tasdiqlari")],
+        ])
+    if WEBAPP_URL:
+        keyboard.append([KeyboardButton(text="🌐 Davomat web-ilovasi", web_app=WebAppInfo(url=WEBAPP_URL))])
+    return ReplyKeyboardMarkup(keyboard=keyboard, is_persistent=True, resize_keyboard=True)
+
+
+def menu_for(message: Message):
+    return main_keyboard(message.from_user.id)
 
 
 def consent_keyboard():
@@ -331,7 +348,7 @@ def build_report(work_day: str):
             missing.append("18:00 chiqish qayd etilmagan")
         explanation = get_explanation(user["telegram_id"], work_day)
         if explanation:
-            reason_text = explanation["text"] or "ovozli izoh (adminlarga yuborilgan)"
+            reason_text = explanation["text"] or "ovozli izoh (nazoratchilarga yuborilgan)"
             note = f"\n  Kechikish izohi ({explanation['kind']}): {reason_text}"
         else:
             note = ""
@@ -348,7 +365,7 @@ def build_report(work_day: str):
 
 async def notify_admins(bot: Bot, text: str):
     chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)] or [""]
-    for admin_id in ADMIN_IDS:
+    for admin_id in REVIEWER_IDS:
         for chunk in chunks:
             try:
                 await bot.send_message(admin_id, chunk)
@@ -456,14 +473,11 @@ def format_name(user_row):
 
 async def require_approved(message: Message) -> bool:
     uid = message.from_user.id
-    if uid in ADMIN_IDS:
-        await message.answer("Admin rejimi faqat nazorat uchun. Buyruqlar: /today, /live, /pending")
-        return False
     if get_user(uid):
         return True
     row = get_any_user(uid)
     if row and row["active"] and not row["approved"]:
-        await message.answer("Ro‘yxatdagi yuz suratingiz admin tasdig‘ini kutmoqda. Tasdiqlangach bot sizga xabar beradi.")
+        await message.answer("Ro‘yxatdagi yuz suratingiz nazoratchi tasdig‘ini kutmoqda. Tasdiqlangach bot sizga xabar beradi.")
     else:
         await message.answer("Avval /start orqali ro‘yxatdan o‘ting.")
     return False
@@ -480,11 +494,16 @@ async def send_face_review(bot: Bot, user_row):
         f"Ism: {user_row['full_name']}\nTelegram ID: {uid}\n"
         "Xodim biometrik qayta ishlashga rozilik berdi."
     )
-    for admin_id in ADMIN_IDS:
+    reviewers = REVIEWER_IDS - {uid}
+    if not reviewers:
+        LOG.warning("Cannot review face enrollment for %s: no other reviewer ID is configured; add another ADMIN_IDS or CONTROLLER_IDS member", uid)
+        await send_to_user(bot, uid, "Ro‘yxatingiz qabul qilindi, ammo uni tasdiqlaydigan boshqa nazoratchi sozlanmagan. O‘zingizning yuzingizni tasdiqlay olmaysiz; administrator boshqa nazoratchi ID sini sozlashi kerak.")
+        return
+    for reviewer_id in reviewers:
         try:
-            await bot.send_photo(admin_id, FSInputFile(user_row["face_path"]), caption=caption, reply_markup=keyboard)
+            await bot.send_photo(reviewer_id, FSInputFile(user_row["face_path"]), caption=caption, reply_markup=keyboard)
         except Exception as exc:
-            LOG.warning("Could not send enrollment approval to admin %s: %s", admin_id, exc)
+            LOG.warning("Could not send enrollment approval to reviewer %s: %s", reviewer_id, exc)
 
 
 async def start_checkin(bot: Bot, message: Message):
@@ -492,12 +511,12 @@ async def start_checkin(bot: Bot, message: Message):
     if not await require_approved(message):
         return
     if parse_day_event(uid, "checkin"):
-        await message.answer("Bugungi kelishingiz allaqachon qayd etilgan.", reply_markup=main_keyboard())
+        await message.answer("Bugungi kelishingiz allaqachon qayd etilgan.", reply_markup=main_keyboard(message.from_user.id))
         return
     if now_local().time() > time(9, 30) and not get_explanation(uid):
         set_pending(uid, "reason_then_checkin", "reason")
         await message.answer(
-            "09:30 dan keyin kelayotganingiz uchun avval kechikish sababini matn yoki ovozli xabar bilan yuboring. Izoh adminlarga boradi."
+            "09:30 dan keyin kelayotganingiz uchun avval kechikish sababini matn yoki ovozli xabar bilan yuboring. Izoh nazoratchilarga yuboriladi."
         )
         return
     set_pending(uid, "checkin", "location")
@@ -512,7 +531,7 @@ async def begin_lunch_event(message: Message, kind: str):
     if not await require_approved(message):
         return
     if parse_day_event(uid, kind):
-        await message.answer("Bu tasdiq bugun allaqachon qayd etilgan.", reply_markup=main_keyboard())
+        await message.answer("Bu tasdiq bugun allaqachon qayd etilgan.", reply_markup=main_keyboard(message.from_user.id))
         return
     try:
         add_event(uid, kind)
@@ -521,7 +540,7 @@ async def begin_lunch_event(message: Message, kind: str):
     user = get_user(uid)
     label = "tushlikka chiqdi" if kind == "lunch_out" else "tushlikdan qaytdi"
     event = parse_day_event(uid, kind)
-    await message.answer(f"{label.capitalize()} deb qayd etildi: {hhmm(event['happened_at'])}.", reply_markup=main_keyboard())
+    await message.answer(f"{label.capitalize()} deb qayd etildi: {hhmm(event['happened_at'])}.", reply_markup=main_keyboard(message.from_user.id))
     await notify_admins(message.bot, f"🔔 {format_name(user)} {hhmm(event['happened_at'])} da {label}.")
 
 
@@ -530,14 +549,14 @@ async def begin_checkout(message: Message):
     if not await require_approved(message):
         return
     if parse_day_event(uid, "checkout"):
-        await message.answer("Bugungi ishdan chiqish allaqachon qayd etilgan.", reply_markup=main_keyboard())
+        await message.answer("Bugungi ishdan chiqish allaqachon qayd etilgan.", reply_markup=main_keyboard(message.from_user.id))
         return
     try:
         add_event(uid, "checkout")
     except sqlite3.IntegrityError:
         pass
     event = parse_day_event(uid, "checkout")
-    await message.answer(f"Ishdan chiqish qayd etildi: {hhmm(event['happened_at'])}.", reply_markup=main_keyboard())
+    await message.answer(f"Ishdan chiqish qayd etildi: {hhmm(event['happened_at'])}.", reply_markup=main_keyboard(message.from_user.id))
     await notify_admins(message.bot, f"🔔 {format_name(get_user(uid))} {hhmm(event['happened_at'])} da ishdan chiqdi.")
 
 
@@ -555,17 +574,17 @@ async def record_reason(message: Message, continue_checkin: bool = False):
     user = get_user(uid)
     await notify_admins(message.bot, f"📝 Kechikish izohi — {format_name(user)} ({hhmm(stamp())}):\n{rendered}")
     if message.voice:
-        for admin_id in ADMIN_IDS:
+        for admin_id in REVIEWER_IDS:
             try:
                 await message.bot.copy_message(admin_id, uid, message.message_id)
             except Exception as exc:
                 LOG.warning("Could not copy voice explanation: %s", exc)
     if continue_checkin:
         set_pending(uid, "checkin", "location")
-        await message.answer("Rahmat, izoh adminlarga yuborildi. Endi ofisga kelganingizni tasdiqlash uchun joriy lokatsiyani yuboring.", reply_markup=location_keyboard())
+        await message.answer("Rahmat, izoh nazoratchilarga yuborildi. Endi ofisga kelganingizni tasdiqlash uchun joriy lokatsiyani yuboring.", reply_markup=location_keyboard())
     else:
         clear_pending(uid)
-        await message.answer("Izoh adminlarga yuborildi. Ishga kelishni belgilash uchun «✅ Ishga keldim» tugmasini bosing.", reply_markup=main_keyboard())
+        await message.answer("Izoh nazoratchilarga yuborildi. Ishga kelishni belgilash uchun «✅ Ishga keldim» tugmasini bosing.", reply_markup=main_keyboard(message.from_user.id))
 
 
 async def scheduler(bot: Bot):
@@ -605,7 +624,7 @@ async def run_scheduled_job(bot: Bot, job: str, work_day: str):
     elif job == "late_reason_prompt":
         text = "⏰ 09:30 bo‘ldi. Hali kelishni qayd etmagan bo‘lsangiz, kechikish sababini matn yoki ovozda yuboring."
     elif job == "lunch_out_reminder":
-        text = "🍽 Tushlikka chiqishdan oldin «Tushlikka chiqyapman» tugmasini bosing."
+        text = "🍽 Tushlikka chiqishdan oldin «Tushlikka» tugmasini bosing."
     elif job == "lunch_in_reminder":
         text = "🔙 Tushlikdan qaytib ishga kelganingizni «Tushlikdan qaytdim» tugmasi bilan tasdiqlang."
     elif job == "checkout_reminder":
@@ -621,7 +640,7 @@ async def run_scheduled_job(bot: Bot, job: str, work_day: str):
         return
     for user in users:
         try:
-            await bot.send_message(user["telegram_id"], text, reply_markup=main_keyboard())
+            await bot.send_message(user["telegram_id"], text, reply_markup=main_keyboard(user["telegram_id"]))
         except Exception as exc:
             LOG.warning("Could not send scheduled reminder to %s: %s", user["telegram_id"], exc)
 
@@ -636,38 +655,35 @@ async def main():
     @dp.message(CommandStart())
     async def command_start(message: Message):
         uid = message.from_user.id
-        if uid in ADMIN_IDS:
-            await message.answer("Admin nazorat paneli. Hisobot: /today\nJonli holat: /live\nYuz tasdig‘ini kutayotganlar: /pending")
-            return
         user = get_user(uid)
         if user:
-            await message.answer(f"Salom, {user['full_name']}! Davomat botiga xush kelibsiz.", reply_markup=main_keyboard())
+            await message.answer(f"Salom, {user['full_name']}! Davomat botiga xush kelibsiz.", reply_markup=main_keyboard(message.from_user.id))
             return
         existing = get_any_user(uid)
         if existing and existing["active"] and not existing["approved"]:
-            await message.answer("Ro‘yxatdagi yuz suratingiz admin tasdig‘ini kutmoqda. Tasdiqlangach bot sizga xabar beradi.")
+            await message.answer("Ro‘yxatdagi yuz suratingiz nazoratchi tasdig‘ini kutmoqda. Tasdiqlangach bot sizga xabar beradi.")
             return
         set_pending(uid, "enroll", "consent", {})
         await message.answer(
-            "Ro‘yxatdan o‘tishdan oldin muhim ma’lumot: yuz suratingiz qurilmadagi mahalliy bazada saqlanadi, ikki adminga bir martalik tasdiq uchun yuboriladi va keyingi kelishlarda video-selfi bilan avtomatik solishtiriladi. Bot roziligingiz va vaqtini qayd etadi. Har tekshiruv videosi tekshiruv tugagach vaqtinchalik fayldan o‘chiriladi. Rozilik bermasangiz, biometrik ro‘yxatdan o‘tolmaysiz; ish beruvchi bilan boshqa davomat usulini kelishishingiz mumkin.\n\nRozimisiz?",
+            "Ro‘yxatdan o‘tishdan oldin muhim ma’lumot: yuz suratingiz qurilmadagi mahalliy bazada saqlanadi, nazoratchilarga bir martalik tasdiq uchun yuboriladi va keyingi kelishlarda video-selfi bilan avtomatik solishtiriladi. Bot roziligingiz va vaqtini qayd etadi. Har tekshiruv videosi tekshiruv tugagach vaqtinchalik fayldan o‘chiriladi. Rozilik bermasangiz, biometrik ro‘yxatdan o‘tolmaysiz; ish beruvchi bilan boshqa davomat usulini kelishishingiz mumkin.\n\nRozimisiz?",
             reply_markup=consent_keyboard(),
         )
 
     @dp.message(Command("help"))
     async def help_command(message: Message):
         await message.answer(
-            "Davomat tugmalari: ishga kelish (lokatsiya + video-selfi), tushlikka chiqish, tushlikdan qaytish, ishdan chiqish. Adminlar /today, /live va /pending orqali nazorat qiladi. Shaxsiy ma’lumotlarni o‘chirish uchun /delete_me buyrug‘idan foydalaning."
+            "Davomat tugmalari: ishga kelish (lokatsiya + video-selfi), tushlikka chiqish, tushlikdan qaytish, ishdan chiqish. Nazoratchilar /today, /live va /pending orqali nazorat qiladi. Shaxsiy ma’lumotlarni o‘chirish uchun /delete_me buyrug‘idan foydalaning."
         )
 
     @dp.message(Command("today"))
     async def today_command(message: Message):
-        if message.from_user.id not in ADMIN_IDS:
+        if message.from_user.id not in REVIEWER_IDS:
             return
         await message.answer(build_report(day_key()))
 
     @dp.message(Command("live"))
     async def live_command(message: Message):
-        if message.from_user.id not in ADMIN_IDS:
+        if message.from_user.id not in REVIEWER_IDS:
             return
         rows = attendance_rows(day_key())
         last = {}
@@ -681,7 +697,7 @@ async def main():
 
     @dp.message(Command("pending"))
     async def pending_command(message: Message):
-        if message.from_user.id not in ADMIN_IDS:
+        if message.from_user.id not in REVIEWER_IDS:
             return
         rows = pending_users()
         if not rows:
@@ -695,14 +711,17 @@ async def main():
 
     @dp.callback_query(F.data.startswith("face:"))
     async def review_enrollment_face(callback: CallbackQuery):
-        if callback.from_user.id not in ADMIN_IDS:
-            await callback.answer("Bu tasdiq faqat adminlar uchun.", show_alert=True)
+        if callback.from_user.id not in REVIEWER_IDS:
+            await callback.answer("Bu amal faqat nazoratchilar uchun.", show_alert=True)
             return
         try:
             _, action, uid_text = callback.data.split(":", 2)
             employee_id = int(uid_text)
         except (ValueError, AttributeError):
             await callback.answer("Tasdiq so‘rovi noto‘g‘ri.", show_alert=True)
+            return
+        if callback.from_user.id == employee_id:
+            await callback.answer("O‘z yuzingizni tasdiqlay olmaysiz. Boshqa nazoratchi ko‘rib chiqishi kerak.", show_alert=True)
             return
         row = get_any_user(employee_id)
         if not row or not row["active"] or row["approved"]:
@@ -717,7 +736,7 @@ async def main():
                     (callback.from_user.id, stamp(), employee_id),
                 )
             if result.rowcount:
-                await callback.bot.send_message(employee_id, "✅ Admin yuz suratingizni tasdiqladi. Endi bot davomat tugmalarini ochdi.", reply_markup=main_keyboard())
+                await callback.bot.send_message(employee_id, "✅ Nazoratchi yuz suratingizni tasdiqladi. Endi bot davomat tugmalarini ochdi.", reply_markup=main_keyboard(employee_id))
                 final_caption = f"✅ Yuz surati tasdiqlandi: {row['full_name']} (Telegram ID {employee_id})."
             else:
                 final_caption = "Bu yuz tasdig‘i avvalroq ko‘rib chiqilgan."
@@ -732,7 +751,7 @@ async def main():
                     Path(row["face_path"]).unlink(missing_ok=True)
                 except OSError:
                     LOG.exception("Could not delete rejected enrollment image for %s", employee_id)
-                await callback.bot.send_message(employee_id, "Admin ro‘yxatdagi yuz suratingizni tasdiqlamadi. Qayta ro‘yxatdan o‘tib, aniqroq selfi yuboring yoki admin bilan bog‘laning.")
+                await callback.bot.send_message(employee_id, "Nazoratchi ro‘yxatdagi yuz suratingizni tasdiqlamadi. Qayta ro‘yxatdan o‘tib, aniqroq selfi yuboring yoki admin bilan bog‘laning.")
                 final_caption = f"❌ Yuz surati rad etildi: {row['full_name']} (Telegram ID {employee_id}). Xodim qayta ro‘yxatdan o‘tishi mumkin."
             else:
                 final_caption = "Bu yuz tasdig‘i avvalroq ko‘rib chiqilgan."
@@ -785,10 +804,10 @@ async def main():
             if existing and existing["active"] and not existing["approved"]:
                 await require_approved(message)
                 return
-            await message.answer("Lokatsiya qabul qilindi. Davomat belgilash uchun tegishli tugmani bosing.", reply_markup=main_keyboard())
+            await message.answer("Lokatsiya qabul qilindi. Davomat belgilash uchun tegishli tugmani bosing.", reply_markup=main_keyboard(message.from_user.id))
             return
         if state["task"] != "checkin" or state["step"] != "location":
-            await message.answer("Hozir lokatsiya kerak emas. Davomat tugmalaridan foydalaning.", reply_markup=main_keyboard())
+            await message.answer("Hozir lokatsiya kerak emas. Davomat tugmalaridan foydalaning.", reply_markup=main_keyboard(message.from_user.id))
             return
         loc = message.location
         distance = distance_from_office(loc.latitude, loc.longitude)
@@ -830,7 +849,7 @@ async def main():
         if not state or state["task"] != "checkin" or state["step"] != "video":
             if not await require_approved(message):
                 return
-            await message.answer("Video hozir kerak emas. Ishga kelishni belgilash uchun «✅ Ishga keldim» tugmasini bosing.", reply_markup=main_keyboard())
+            await message.answer("Video hozir kerak emas. Ishga kelishni belgilash uchun «✅ Ishga keldim» tugmasini bosing.", reply_markup=main_keyboard(message.from_user.id))
             return
         user = get_user(uid)
         if not user:
@@ -869,7 +888,7 @@ async def main():
         if not face_match or not live_match:
             await message.answer(
                 "Tekshiruv o‘tmadi. Yuzingiz aniq ko‘rinsin, ekranga qarab boshni so‘ralgan tomonga burib, 3–10 soniyalik yangi video yuboring. Bir necha urinishdan keyin ham o‘tmasa, admin bilan bog‘laning.",
-                reply_markup=main_keyboard(),
+                reply_markup=main_keyboard(uid),
             )
             await notify_admins(message.bot, f"⚠️ {format_name(user)} ning kelish selfi-video tekshiruvi muvaffaqiyatsiz bo‘ldi.")
             return
@@ -878,13 +897,13 @@ async def main():
             add_event(uid, "checkin", payload["lat"], payload["lon"], payload["distance"], 1, 1)
         except sqlite3.IntegrityError:
             clear_pending(uid)
-            await message.answer("Bugungi kelishingiz allaqachon qayd etilgan.", reply_markup=main_keyboard())
+            await message.answer("Bugungi kelishingiz allaqachon qayd etilgan.", reply_markup=main_keyboard(message.from_user.id))
             return
         clear_pending(uid)
         event = parse_day_event(uid, "checkin")
         delay = late_minutes(event["happened_at"])
         delay_text = f" {delay} daqiqa kechikish qayd etildi." if delay else " O‘z vaqtida keldingiz."
-        await message.answer(f"Kelishingiz tasdiqlandi: {hhmm(event['happened_at'])}.{delay_text}", reply_markup=main_keyboard())
+        await message.answer(f"Kelishingiz tasdiqlandi: {hhmm(event['happened_at'])}.{delay_text}", reply_markup=main_keyboard(message.from_user.id))
         await notify_admins(message.bot, f"✅ {format_name(user)} {hhmm(event['happened_at'])} da ishga keldi (ofisdan {round(payload['distance'])} m). Kechikish: {delay} daqiqa.")
 
     @dp.message(F.voice)
@@ -901,13 +920,13 @@ async def main():
         if get_user(uid) and now_local().time() >= time(9, 30) and not get_event(uid, "checkin") and not get_explanation(uid):
             await record_reason(message, continue_checkin=False)
             return
-        await message.answer("Ovozli xabar faqat 09:30 dan keyingi kechikish sababini yuborish uchun qabul qilinadi.", reply_markup=main_keyboard())
+        await message.answer("Ovozli xabar faqat 09:30 dan keyingi kechikish sababini yuborish uchun qabul qilinadi.", reply_markup=main_keyboard(message.from_user.id))
 
     @dp.message(F.text == "✅ Ishga keldim")
     async def arrival_button(message: Message):
         await start_checkin(message.bot, message)
 
-    @dp.message(F.text == "🍽 Tushlikka chiqyapman")
+    @dp.message(F.text.in_({"🍽 Tushlikka", "🍽 Tushlikka chiqyapman"}))
     async def lunch_out_button(message: Message):
         await begin_lunch_event(message, "lunch_out")
 
@@ -918,6 +937,39 @@ async def main():
     @dp.message(F.text == "🏁 Ishdan chiqdim")
     async def checkout_button(message: Message):
         await begin_checkout(message)
+
+    @dp.message(F.text == "📊 Bugungi hisobot")
+    async def report_button(message: Message):
+        if message.from_user.id not in REVIEWER_IDS:
+            await message.answer("Bu bo‘lim faqat nazoratchilar uchun.")
+            return
+        await message.answer(build_report(day_key()), reply_markup=main_keyboard(message.from_user.id))
+
+    @dp.message(F.text == "📍 Jonli holat")
+    async def live_button(message: Message):
+        if message.from_user.id not in REVIEWER_IDS:
+            await message.answer("Bu bo‘lim faqat nazoratchilar uchun.")
+            return
+        rows = attendance_rows(day_key())
+        last = {row["telegram_id"]: row for row in rows}
+        lines = [f"📍 Bugungi jonli holat — {day_key()}"]
+        lines.extend(f"• {u['full_name']}: {last[u['telegram_id']]['kind']} {hhmm(last[u['telegram_id']]['happened_at'])}" if u["telegram_id"] in last else f"• {u['full_name']}: hali belgi yo‘q" for u in all_users())
+        await message.answer("\n".join(lines), reply_markup=main_keyboard(message.from_user.id))
+
+    @dp.message(F.text == "🧑‍💼 Yuz tasdiqlari")
+    async def face_reviews_button(message: Message):
+        if message.from_user.id not in REVIEWER_IDS:
+            await message.answer("Bu bo‘lim faqat nazoratchilar uchun.")
+            return
+        rows = pending_users()
+        if not rows:
+            await message.answer("Yuz tasdig‘ini kutayotgan xodim yo‘q.", reply_markup=main_keyboard(message.from_user.id))
+            return
+        await message.answer("⏳ Yuz tasdig‘ini kutayotganlar:", reply_markup=main_keyboard(message.from_user.id))
+        for row in rows:
+            if row["telegram_id"] == message.from_user.id:
+                await message.answer("O‘z yuzingizni tasdiqlay olmaysiz. Boshqa nazoratchi ko‘rib chiqadi.")
+            await send_face_review(message.bot, row)
 
     @dp.message(F.text)
     async def on_text(message: Message):
@@ -938,22 +990,61 @@ async def main():
             return
         existing = get_any_user(uid)
         if existing and existing["active"] and not existing["approved"]:
-            await message.answer("Ro‘yxatdagi yuz suratingiz admin tasdig‘ini kutmoqda. Tasdiqlangach bot sizga xabar beradi.")
+            await message.answer("Ro‘yxatdagi yuz suratingiz nazoratchi tasdig‘ini kutmoqda. Tasdiqlangach bot sizga xabar beradi.")
             return
         if now_local().time() >= time(9, 30) and not get_event(uid, "checkin") and not get_explanation(uid) and get_user(uid):
             await record_reason(message, continue_checkin=False)
             return
-        await message.answer("Kerakli davomat tugmasini tanlang yoki /help buyrug‘ini yuboring.", reply_markup=main_keyboard())
+        await message.answer("Kerakli davomat tugmasini tanlang yoki /help buyrug‘ini yuboring.", reply_markup=main_keyboard(message.from_user.id))
 
     @dp.message()
     async def unknown_message(message: Message):
         await message.answer("Xabar turi tushunarsiz. /help buyrug‘idan foydalaning.")
 
+    api_runner = None
     scheduler_task = asyncio.create_task(scheduler(bot))
     try:
+        if WEBAPP_API_ENABLED:
+            parsed_url = urlsplit(WEBAPP_URL)
+            if parsed_url.scheme != "https" or not parsed_url.netloc:
+                raise RuntimeError("WEBAPP_URL must be a public HTTPS URL before enabling the Web App API.")
+            expected_origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            api_origin = WEBAPP_ORIGIN or expected_origin
+            if api_origin != expected_origin:
+                raise RuntimeError("WEBAPP_ORIGIN must exactly match the HTTPS origin in WEBAPP_URL.")
+            if WEBAPP_API_HOST not in {"127.0.0.1", "localhost", "::1"}:
+                raise RuntimeError("WEBAPP_API_HOST must remain on loopback; expose it only through the approved HTTPS proxy.")
+            from webapp_api import build_api_app, start_api
+            api_app = build_api_app(
+                token=BOT_TOKEN,
+                allowed_origin=api_origin,
+                office_lat=OFFICE_LAT,
+                office_lon=OFFICE_LON,
+                office_radius_m=GEOFENCE_METERS,
+                temp_dir=TMP_DIR,
+                get_user=get_user,
+                get_event=get_event,
+                get_explanation=get_explanation,
+                add_event=add_event,
+                compare_face=compare_face,
+                notify_admins=lambda text: notify_admins(bot, text),
+                format_name=format_name,
+                late_minutes=late_minutes,
+                hhmm=hhmm,
+                now_local=now_local,
+                distance_from_office=distance_from_office,
+            )
+            api_runner = await start_api(api_app, host=WEBAPP_API_HOST, port=WEBAPP_API_PORT)
+            LOG.info("Web App API listening on %s:%s (loopback)", WEBAPP_API_HOST, WEBAPP_API_PORT)
+        try:
+            await bot.set_my_commands([])
+        except Exception as exc:
+            LOG.warning("Could not clear Telegram slash-command menu: %s", exc)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         scheduler_task.cancel()
+        if api_runner is not None:
+            await api_runner.cleanup()
         await bot.session.close()
 
 

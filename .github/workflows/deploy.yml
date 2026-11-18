@@ -21,7 +21,6 @@ jobs:
       DEPLOY_USER: cue-attendance-bot
       DEPLOY_DIR: /opt/cue-attendance-bot
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
     steps:
       - name: Check out private repository
         uses: actions/checkout@v4
@@ -59,8 +58,8 @@ jobs:
           release_dir="${DEPLOY_DIR}/releases/${GITHUB_SHA}"
           ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes "$target" "mkdir -p '${release_dir}/deploy'"
           scp -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            bot.py requirements.txt README.md "$target:${release_dir}/"
+            bot.py webapp_api.py requirements.txt README.md "$target:${release_dir}/"
           scp -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
             deploy/deploy.sh "$target:${release_dir}/deploy/"
-          printf '%s\n' "$BOT_TOKEN" | ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$target" "bash '${release_dir}/deploy/deploy.sh' '${GITHUB_SHA}'"
+          ssh -i "$HOME/.ssh/id_ed25519" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$target" "bash '${release_dir}/deploy/deploy.sh' '${GITHUB_SHA}'" </dev/null
