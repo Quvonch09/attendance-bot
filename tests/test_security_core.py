@@ -45,6 +45,22 @@ class SecurityCoreTests(unittest.TestCase):
         self.assertIsNone(verify_init_data(raw.replace("Test", "Evil"), token, now_epoch=now))
         self.assertIsNone(verify_init_data(raw, token + "x", now_epoch=now))
 
+    def test_regular_employee_keyboard_has_exactly_four_attendance_buttons(self):
+        keyboard = bot.main_keyboard(uid=123456789).keyboard
+        texts = [button.text for row in keyboard for button in row]
+        self.assertEqual(texts, ["✅ Ishga keldim", "🍽 Tushlikka", "🔙 Tushlikdan qaytdim", "🏁 Ishdan chiqdim"])
+
+    def test_webapp_action_url_sets_action_and_keeps_existing_query(self):
+        original_url = bot.WEBAPP_URL
+        bot.WEBAPP_URL = "https://app.example.test/attendance?source=telegram"
+        try:
+            self.assertEqual(
+                bot.webapp_action_url("lunch_in"),
+                "https://app.example.test/attendance?source=telegram&action=lunch_in",
+            )
+        finally:
+            bot.WEBAPP_URL = original_url
+
     def test_webapp_events_require_order_and_reject_duplicates(self):
         with tempfile.TemporaryDirectory() as directory:
             original_db = bot.DB_PATH

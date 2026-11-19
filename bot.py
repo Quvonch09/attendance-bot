@@ -9,7 +9,7 @@ import sqlite3
 import tempfile
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
@@ -249,9 +249,14 @@ def main_keyboard(uid: int | None = None):
             [KeyboardButton(text="📊 Bugungi hisobot"), KeyboardButton(text="📍 Jonli holat")],
             [KeyboardButton(text="🧑‍💼 Yuz tasdiqlari")],
         ])
-    if WEBAPP_URL:
-        keyboard.append([KeyboardButton(text="🌐 Davomat web-ilovasi")])
     return ReplyKeyboardMarkup(keyboard=keyboard, is_persistent=True, resize_keyboard=True)
+
+
+def webapp_action_url(action: str) -> str:
+    parsed = urlsplit(WEBAPP_URL)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["action"] = action
+    return urlunsplit(parsed._replace(query=urlencode(query)))
 
 
 def menu_for(message: Message):
@@ -262,12 +267,18 @@ async def send_webapp_prompt(message: Message, action: str):
     if not WEBAPP_API_ENABLED or not WEBAPP_URL:
         await message.answer("Davomat Web App hali xavfsiz HTTPS/API manzili bilan sozlanmagan. Hozircha botning mavjud tugmalaridan foydalaning.")
         return
+    if not await require_approved(message):
+        return
     if action == "checkin" and now_local().time() >= time(9, 30) and not get_explanation(message.from_user.id):
         set_pending(message.from_user.id, "webapp_late_reason", "reason")
         await message.answer("09:30 dan keyin kelayotganingiz uchun avval kechikish sababini matn yoki ovozli xabar bilan yuboring. Izoh nazoratchilarga yuboriladi; so‘ng kelish tugmasini qayta bosing.")
         return
     labels = {"checkin": "✅ Ishga kelishni", "lunch_out": "🍽 Tushlikka chiqishni", "lunch_in": "🔙 Tushlikdan qaytishni", "checkout": "🏁 Ishdan chiqishni"}
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"{labels[action]} tasdiqlash", web_app=WebAppInfo(url=WEBAPP_URL))]])
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(text=f"{labels[action]} tasdiqlash", web_app=WebAppInfo(url=webapp_action_url(action)))
+        ]]
+    )
     await message.answer(f"{labels[action]} yuz mosligi, bir martalik harakat topshirig‘i va GPS (barcha amallar uchun majburiy) bilan bajaring.", reply_markup=keyboard)
 
 

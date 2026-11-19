@@ -9,6 +9,13 @@
   let stream = null, coords = null, challenge = null, busy = false, stopped = false;
   const action = () => $('action-select').value;
   const labels = {checkin:'kelish', lunch_out:'tushlikka chiqish', lunch_in:'tushlikdan qaytish', checkout:'ishdan chiqish'};
+  const requestedAction = new URLSearchParams(window.location.search).get('action');
+  if (Object.prototype.hasOwnProperty.call(labels, requestedAction)) {
+    $('action-select').value = requestedAction;
+    $('action-select').disabled = true;
+    const actionLabel = document.querySelector('label[for="action-select"]');
+    if (actionLabel) actionLabel.textContent = 'Tanlangan davomat amali';
+  }
   const setNotice = (text, kind = '') => { const n=$('notice'); n.textContent=text; n.className=`notice ${kind}`.trim(); };
   const markDone = (id) => $(id).classList.add('done');
   const headers = () => ({'X-Telegram-Init-Data': initData});
