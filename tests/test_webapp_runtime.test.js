@@ -56,12 +56,13 @@ class MockFormData {
   append(name, value, filename) { this.fields.push({name, value, filename}); }
 }
 
-function createWebView({platform, useTelegramLocation, outsideFirst = false, attendanceError = ''}) {
+function createWebView({platform, useTelegramLocation, enableBrowserFallback = false, outsideFirst = false, browserOutside = false, attendanceError = '', faceMode = 'moving', browserAccuracies, telegramAccuracies, action = 'checkin', challengeError = ''} = {}) {
   const elements = new Map();
   const getElement = (id) => {
     if (!elements.has(id)) elements.set(id, makeElement(id));
     return elements.get(id);
   };
+  getElement('action-select').value = action;
   let getUserMediaCalls = 0;
   let locationReads = 0;
   let browserLocationReads = 0;
@@ -69,7 +70,9 @@ function createWebView({platform, useTelegramLocation, outsideFirst = false, att
   let attendanceCalls = 0;
   let greenBeforeAttendanceResponse = false;
   let canvasDraws = 0;
+  let detectorFrames = 0;
   const locationPayloads = [];
+  const challengeActions = [];
   const canvasSizes = [];
   const attendanceForms = [];
   const scheduledDelays = [];
@@ -91,7 +94,8 @@ function createWebView({platform, useTelegramLocation, outsideFirst = false, att
     init(callback) { callback(); },
     getLocation(callback) {
       locationReads += 1;
-      callback({latitude: 38.8557873, longitude: 65.8002788, horizontal_accuracy: outsideFirst ? 25 : locationReads === 1 ? 350 : 20});
+      const list = telegramAccuracies || (outsideFirst ? [25] : [350, 20]);
+      callback({latitude: 38.8557873, longitude: 65.8002788, horizontal_accuracy: list[Math.min(locationReads - 1, list.length - 1)]});
     },
   } : undefined;
   const webApp = {
@@ -102,8 +106,28 @@ function createWebView({platform, useTelegramLocation, outsideFirst = false, att
     expand() {},
   };
   if (locationManager) webApp.LocationManager = locationManager;
+
+  class MockFaceDetection {
+    constructor() { this.callback = null; this.index = 0; }
+    setOptions() {}
+    onResults(callback) { this.callback = callback; }
+    async initialize() {}
+    async send() {
+      detectorFrames += 1;
+      const i = this.index++;
+      if (faceMode === 'none') { this.callback({detections: []}); return; }
+      const centers = [0.50, 0.50, 0.50, 0.50, 0.58, 0.64, 0.68, 0.70];
+      const x = centers[Math.min(i, centers.length - 1)];
+      this.callback({detections: [{
+        boundingBox: {xCenter: x, yCenter: 0.50, width: 0.35, height: 0.45},
+        landmarks: [{x: x - 0.10, y: 0.40}, {x: x + 0.10, y: 0.40}, {x, y: 0.52}],
+      }]});
+    }
+    async close() {}
+  }
   const window = {
     Telegram: {WebApp: webApp},
+    FaceDetection: MockFaceDetection,
     ATTENDANCE_API_BASE: 'https://attendance.example',
     location: {search: '', origin: 'https://attendance.example'},
   };
@@ -115,11 +139,12 @@ function createWebView({platform, useTelegramLocation, outsideFirst = false, att
       async getUserMedia() { getUserMediaCalls += 1; return cameraStream; },
     },
   };
-  if (!useTelegramLocation) {
+  if (!useTelegramLocation || enableBrowserFallback) {
     navigator.geolocation = {
       getCurrentPosition(success) {
         browserLocationReads += 1;
-        success({coords: {latitude: 38.8557873, longitude: 65.8002788, accuracy: browserLocationReads === 1 ? 350 : 20}});
+        const list = browserAccuracies || (useTelegramLocation ? [20] : [350, 20]);
+        success({coords: {latitude: 38.8557873, longitude: 65.8002788, accuracy: list[Math.min(browserLocationReads - 1, list.length - 1)]}});
       },
     };
   }
@@ -132,11 +157,8 @@ function createWebView({platform, useTelegramLocation, outsideFirst = false, att
         height: 0,
         getContext() {
           return {
-            save() {},
-            translate() {},
-            scale() {},
-            drawImage() { canvasDraws += 1; },
-            restore() {},
+            save() {}, translate() {}, scale() {},
+            drawImage() { canvasDraws += 1; }, restore() {},
           };
         },
         toBlob(callback, type, quality) {
@@ -157,12 +179,17 @@ function createWebView({platform, useTelegramLocation, outsideFirst = false, att
       if (outsideFirst && locationCheckCalls === 1) {
         return response({error: 'outside_office_radius', distance_m: 1077, accuracy_m: payload.accuracy_m}, 403);
       }
-      if (locationCheckCalls === 1) {
+      if (browserOutside && locationCheckCalls === 2) {
+        return response({error: 'outside_office_radius', distance_m: 1077, accuracy_m: payload.accuracy_m}, 403);
+      }
+      if (payload.accuracy_m > 50) {
         return response({error: 'location_accuracy_insufficient', distance_m: 280, accuracy_m: payload.accuracy_m}, 422);
       }
       return response({ok: true, distance_m: 230, accuracy_m: payload.accuracy_m});
     }
     if (String(url).includes('/api/challenge')) {
+      challengeActions.push(new URL(String(url)).searchParams.get('action'));
+      if (challengeError) return response({error: challengeError}, 409);
       return response({challenge_id: 'one-use-test-challenge', instruction: 'Chapga qarang'});
     }
     if (String(url).includes('/api/attendance')) {
@@ -183,28 +210,23 @@ function createWebView({platform, useTelegramLocation, outsideFirst = false, att
   };
   const fastSetTimeout = (callback, ms, ...args) => {
     scheduledDelays.push(ms);
-    return nativeSetTimeout(callback, ms === 1800 ? 100 : ms === 3000 ? 30 : 0, ...args);
+    return nativeSetTimeout(callback, ms === 1800 ? 100 : 0, ...args);
   };
   vm.runInNewContext(APP_JS, {
-    window,
-    navigator,
-    document,
-    URLSearchParams,
-    FormData: MockFormData,
-    fetch,
-    setTimeout: fastSetTimeout,
-    clearTimeout: nativeClearTimeout,
-    Promise,
-    Error,
-    console,
+    window, navigator, document, URLSearchParams, FormData: MockFormData,
+    fetch, setTimeout: fastSetTimeout, clearTimeout: nativeClearTimeout,
+    Promise, Error, console,
   }, {filename: 'webapp/app.js'});
   return {
     elements,
+    element: getElement,
     getUserMediaCalls: () => getUserMediaCalls,
     locationReads: () => locationReads,
     browserLocationReads: () => browserLocationReads,
     locationCheckCalls: () => locationCheckCalls,
+    challengeActions,
     attendanceCalls: () => attendanceCalls,
+    detectorFrames: () => detectorFrames,
     greenBeforeAttendanceResponse: () => greenBeforeAttendanceResponse,
     canvasDraws: () => canvasDraws,
     canvasSizes,
@@ -234,27 +256,29 @@ async function exerciseAccuracyRetry(environment) {
   assert.equal(start.disabled, false);
   assert.match(environment.elements.get('notice').textContent, /aniqlik/i);
 
-  await start.click();
+  const flow = start.click();
+  await waitUntil(() => environment.locationCheckCalls() === 2, 'second server GPS check');
   assert.equal(environment.locationCheckCalls(), 2);
   assert.equal(environment.getUserMediaCalls(), 1, 'retry reuses the still-live camera stream');
   assert.equal(environment.track.stopCalls, 0);
-  assert.equal(environment.elements.get('capture-button').hidden, true, 'the manual capture button stays hidden');
+  assert.equal(environment.elements.get('capture-button').hidden, true, 'manual capture stays hidden');
   assert.equal(environment.elements.get('start-button').hidden, true);
   assert.match(environment.elements.get('location-status').textContent, /GPS ±20 m/);
-  assert.match(environment.elements.get('notice').textContent, /avtomatik/i);
-
   await waitUntil(() => environment.attendanceCalls() === 1, 'automatic attendance upload');
-  assert.equal(environment.greenBeforeAttendanceResponse(), false, 'the green state is not shown before server success');
-  assert.equal(environment.elements.get('video-wrap').classList.contains('confirmed'), true, 'green state appears only after a successful server response');
+  await flow;
+  assert.equal(environment.greenBeforeAttendanceResponse(), false, 'green state is not shown before server success');
+  assert.equal(environment.elements.get('video-wrap').classList.contains('confirmed'), true, 'green state appears only after successful server response');
+  assert.match(environment.elements.get('capture-status').textContent, /Server tasdiqladi/);
   assert.equal(environment.track.stopCalls, 0, 'camera remains visible briefly so the user can see confirmation');
-  assert.equal(environment.canvasDraws(), 5, 'five frames are captured automatically');
-  assert.deepEqual(environment.canvasSizes[0], {width: 720, height: 405, type: 'image/jpeg', quality: 0.72}, 'frame dimensions preserve the camera aspect ratio');
-  assert.ok(environment.scheduledDelays.includes(3000), 'the direction instruction has a short response countdown');
+  assert.equal(environment.canvasDraws(), 5, 'five frames are captured after framing and movement');
+  assert.equal(environment.detectorFrames() >= 7, true, 'the local face detector waits for a centered face and visible movement');
+  assert.deepEqual(environment.canvasSizes[0], {width: 720, height: 405, type: 'image/jpeg', quality: 0.72}, 'frames preserve camera aspect ratio');
+  assert.equal(environment.scheduledDelays.includes(3000), false, 'there is no fixed three-second countdown');
   assert.equal(environment.attendanceForms[0].filter((field) => field.name === 'frames').length, 5);
   await waitUntil(() => environment.track.stopCalls === 1, 'camera cleanup after visible confirmation');
 }
 
-test('iOS Telegram native LocationManager retry auto-captures and confirms only after the server response', async () => {
+test('iOS Telegram native location retry automatically captures a short sequence and confirms only after server success', async () => {
   const environment = createWebView({platform: 'ios', useTelegramLocation: true});
   await exerciseAccuracyRetry(environment);
   assert.equal(environment.locationReads(), 2);
@@ -263,7 +287,7 @@ test('iOS Telegram native LocationManager retry auto-captures and confirms only 
   assert.equal(environment.locationPayloads[1].accuracy_m, 20);
 });
 
-test('Android browser geolocation retry auto-captures while preserving frame proportions', async () => {
+test('Android browser geolocation retry automatically captures while preserving frame proportions', async () => {
   const environment = createWebView({platform: 'android', useTelegramLocation: false});
   await exerciseAccuracyRetry(environment);
   assert.equal(environment.locationReads(), 0);
@@ -272,30 +296,53 @@ test('Android browser geolocation retry auto-captures while preserving frame pro
   assert.equal(environment.locationPayloads[1].accuracy_m, 20);
 });
 
+test('iOS Telegram GPS outside result tries permitted WebView GPS and accepts only its server-verified result', async () => {
+  const environment = createWebView({platform: 'ios', useTelegramLocation: true, enableBrowserFallback: true, outsideFirst: true});
+  await environment.elements.get('start-button').click();
+  await waitUntil(() => environment.attendanceCalls() === 1, 'fallback attendance upload');
+  assert.equal(environment.locationReads(), 1);
+  assert.equal(environment.browserLocationReads(), 1);
+  assert.equal(environment.locationCheckCalls(), 2, 'both location sources were checked by the server');
+  assert.match(environment.elements.get('location-status').textContent, /WebView GPS tasdiqlandi/);
+  assert.equal(environment.elements.get('video-wrap').classList.contains('confirmed'), true);
+  assert.equal(environment.locationPayloads.length, 2);
+});
+
+test('Android Telegram outside result reports server distance and source when permitted browser GPS is also outside', async () => {
+  const environment = createWebView({platform: 'android', useTelegramLocation: true, enableBrowserFallback: true, outsideFirst: true, browserOutside: true, browserAccuracies: [25]});
+  await environment.elements.get('start-button').click();
+  const message = environment.elements.get('notice').textContent;
+  assert.match(message, /WebView GPS ham alohida tekshirildi/);
+  assert.match(message, /1077 m/);
+  assert.match(message, /Telegram LocationManager|Telegram WebView GPS/);
+  assert.match(message, /Davomat qayd etilmadi/);
+  assert.doesNotMatch(message, /38\.8557873|65\.8002788/);
+  assert.equal(environment.track.stopCalls, 0);
+  assert.equal(environment.elements.get('video').srcObject, environment.cameraStream);
+});
+
 test('face-match failure is explained separately and never turns the guide green', async () => {
   const environment = createWebView({platform: 'ios', useTelegramLocation: true, attendanceError: 'face_match_failed'});
-  const start = environment.elements.get('start-button');
-  await start.click();
-  await start.click();
+  await environment.elements.get('start-button').click();
+  await environment.elements.get('start-button').click();
   await waitUntil(() => environment.attendanceCalls() === 1, 'face-match response');
   await waitUntil(() => environment.elements.get('retry-button').hidden === false, 'retry control');
   assert.match(environment.elements.get('notice').textContent, /profil suratiga mos kelmadi/i);
   assert.equal(environment.elements.get('video-wrap').classList.contains('confirmed'), false);
-  assert.equal(environment.track.stopCalls, 0, 'the live preview remains available for a retry');
+  assert.equal(environment.track.stopCalls, 0, 'live preview remains available for retry');
 });
 
 test('movement-check failure is explained separately and never turns the guide green', async () => {
   const environment = createWebView({platform: 'android', useTelegramLocation: true, attendanceError: 'motion_check_failed'});
-  const start = environment.elements.get('start-button');
-  await start.click();
-  await start.click();
+  await environment.elements.get('start-button').click();
+  await environment.elements.get('start-button').click();
   await waitUntil(() => environment.attendanceCalls() === 1, 'movement-check response');
   await waitUntil(() => environment.elements.get('retry-button').hidden === false, 'retry control');
   assert.match(environment.elements.get('notice').textContent, /topshiriqdagi harakat sezilmadi/i);
   assert.equal(environment.elements.get('video-wrap').classList.contains('confirmed'), false);
 });
 
-test('Android Telegram outside result shows distance, accuracy and source without stopping camera', async () => {
+test('Telegram geofence rejection without browser fallback does not stop camera or expose coordinates', async () => {
   const environment = createWebView({platform: 'android', useTelegramLocation: true, outsideFirst: true});
   const start = environment.elements.get('start-button');
   await start.click();
@@ -311,16 +358,39 @@ test('Android Telegram outside result shows distance, accuracy and source withou
   assert.equal(start.textContent, 'GPSni qayta tekshirish →');
 });
 
-test('Stop during the automatic-capture countdown cancels upload and camera use', async () => {
-  const environment = createWebView({platform: 'ios', useTelegramLocation: true});
-  const start = environment.elements.get('start-button');
-  await start.click();
-  await start.click();
-  assert.equal(environment.elements.get('start-button').hidden, true);
+test('Stop during automatic face framing cancels upload and camera use', async () => {
+  const environment = createWebView({platform: 'ios', useTelegramLocation: true, faceMode: 'none', telegramAccuracies: [20]});
+  const captureStatus = environment.element('capture-status');
+  const pendingStart = environment.elements.get('start-button').click();
+  await waitUntil(() => /Yuz topilmadi/.test(captureStatus.textContent), 'automatic face framing');
   await environment.elements.get('stop-button').click();
-  await new Promise((resolve) => nativeSetTimeout(resolve, 60));
-  assert.equal(environment.attendanceCalls(), 0, 'stopping before the countdown ends must not submit attendance');
+  await pendingStart;
+  assert.equal(environment.attendanceCalls(), 0, 'stopping before a valid face/movement sequence must not submit attendance');
   assert.equal(environment.track.stopCalls, 1);
   assert.equal(environment.elements.get('video-wrap').classList.contains('confirmed'), false);
   assert.match(environment.elements.get('notice').textContent, /to‘xtatildi/i);
+});
+
+test('lunch-out sequence 409 is shown in the movement step and sends no face frames', async () => {
+  const environment = createWebView({platform: 'android', useTelegramLocation: true, telegramAccuracies: [20], action: 'lunch_out', challengeError: 'sequence_invalid'});
+  await environment.elements.get('start-button').click();
+  assert.deepEqual(environment.challengeActions, ['lunch_out']);
+  assert.equal(environment.locationCheckCalls(), 1, 'the office location was accepted by the server');
+  assert.equal(environment.detectorFrames(), 0, 'face capture must not start without an issued challenge');
+  assert.equal(environment.attendanceCalls(), 0, 'no attendance upload occurs on a rejected challenge');
+  assert.match(environment.elements.get('motion-status').textContent, /oldingi davomat amali qayd etilmagan/i);
+  assert.match(environment.elements.get('instruction').textContent, /Ishga kelish/);
+  assert.match(environment.elements.get('capture-status').textContent, /kadrlar yuborilmadi/i);
+  assert.equal(environment.elements.get('capture-count').textContent, '0 / 5');
+  assert.equal(environment.elements.get('start-button').textContent, 'Qayta tekshirish →');
+  assert.equal(environment.elements.get('video').srcObject, environment.cameraStream, 'preview stays live for the user to read the error');
+});
+
+test('duplicate attendance action 409 is surfaced clearly and does not start capture', async () => {
+  const environment = createWebView({platform: 'ios', useTelegramLocation: true, telegramAccuracies: [20], action: 'lunch_out', challengeError: 'duplicate_action'});
+  await environment.elements.get('start-button').click();
+  assert.equal(environment.detectorFrames(), 0);
+  assert.equal(environment.attendanceCalls(), 0);
+  assert.match(environment.elements.get('instruction').textContent, /allaqachon qayd etilgan/i);
+  assert.match(environment.elements.get('capture-status').textContent, /kadrlar yuborilmadi/i);
 });

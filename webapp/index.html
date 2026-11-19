@@ -6,8 +6,13 @@
   <meta name="theme-color" content="#f5f7fb">
   <title>Davomat — check-in</title>
   <link rel="stylesheet" href="styles.css">
+  <style>
+    .video-wrap.aligned:not(.confirmed) .face-guide{display:block;border:2px solid #66a5ff;border-style:solid;box-shadow:0 0 0 999px rgba(72,130,255,.06)}
+    .video-wrap.aligned:not(.confirmed):after{content:'YUZ KADRDA';position:absolute;right:12px;top:12px;padding:7px 10px;border-radius:999px;background:#2d6eea;color:#fff;font-size:10px;font-weight:800;letter-spacing:.04em}
+  </style>
   <script src="config.js"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script defer src="/face-detection/v0.4.1646425229/face_detection.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
@@ -19,15 +24,15 @@
     <section class="card steps-card" aria-label="Check-in qadamlar">
       <div class="step" id="step-camera"><div class="step-icon">▣</div><div class="step-copy"><h3>Old kamera</h3><p id="camera-status">Kamera faqat kadr olish uchun ishlatiladi</p></div><span class="step-state" id="camera-state">1</span></div>
       <div class="step" id="step-location"><div class="step-icon">⌖</div><div class="step-copy"><h3>Ofis joylashuvi</h3><p id="location-status">Kamera ishga tushgach joylashuv tekshiriladi</p></div><span class="step-state" id="location-state">2</span></div>
-      <div class="step" id="step-motion"><div class="step-icon">↔</div><div class="step-copy"><h3>Harakat tekshiruvi</h3><p id="motion-status">Oddiy harakat tekshiruvi · yuzni avtomatik solishtirish</p></div><span class="step-state" id="motion-state">3</span></div>
+      <div class="step" id="step-motion"><div class="step-icon">↔</div><div class="step-copy"><h3>Harakat tekshiruvi</h3><p id="motion-status">Oddiy harakat tekshiruvi · yuz serverda solishtiriladi</p></div><span class="step-state" id="motion-state">3</span></div>
     </section>
     <section class="card camera-card">
       <div class="camera-head"><div><p class="eyebrow">KAMERA</p><h3>Yuzingizni kadrga joylang</h3></div><span class="live-tag"><i></i> LIVE</span></div>
       <div class="video-wrap" id="video-wrap"><video id="video" autoplay muted playsinline webkit-playsinline></video><div class="camera-placeholder" id="camera-placeholder"><div class="camera-glyph">◉</div><strong>Kamera hali yoqilmagan</strong><span>Tekshiruvni boshlang; qurilma so‘rasa, kamera va aniq joylashuvga ruxsat bering</span></div><div class="face-guide" aria-hidden="true"></div></div>
       <div class="challenge" id="challenge-box"><span class="challenge-icon">✦</span><div><small>HARAKAT TOPSHIRIG‘I</small><strong id="instruction">Topshiriq kamera yoqilgach chiqadi</strong></div></div>
-      <div class="capture-meta"><span id="capture-status">5 ta kadr avtomatik olinadi</span><span id="capture-count">0 / 5</span></div><div class="progress-track"><div id="progress" class="progress-fill"></div></div>
+      <div class="capture-meta"><span id="capture-status">Yuz ramkaga joylashgach 5 kadr avtomatik olinadi</span><span id="capture-count">0 / 5</span></div><div class="progress-track"><div id="progress" class="progress-fill"></div></div>
       <div class="actions"><button id="start-button" class="button primary">Tekshiruvni boshlash <span>→</span></button><button id="capture-button" class="button primary" hidden>Kadrlarni olish <span>→</span></button><button id="retry-button" class="button secondary" hidden>Qayta urinish</button><button id="stop-button" class="button text-button" hidden>To‘xtatish</button></div>
-      <p class="privacy-note">Rasm va joylashuv faqat davomatni tekshirish uchun serverga yuboriladi. Bu tekshiruv sertifikatlangan liveness tizimi emas.</p>
+      <p class="privacy-note">Yuzni kadrga joylashtirish shu Web App ichida bajariladi. Kadrlar faqat davomat uchun serverga yuboriladi; serverdagi yuz va oddiy harakat tekshiruvi saqlanadi. Bu sertifikatlangan liveness tizimi emas.</p>
     </section>
     <footer>Muammo bormi? Rahbaringiz yoki administratorga murojaat qiling.</footer>
   </main>

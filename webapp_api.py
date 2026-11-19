@@ -29,6 +29,14 @@ MAX_FRAMES = 6
 CHALLENGE_TTL = 300
 MAX_LOCATION_ACCURACY_M = 100_000
 ALLOWED_ACTIONS = ("checkin", "lunch_out", "lunch_in", "checkout")
+FACE_DETECTION_VERSION = "v0.4.1646425229"
+FACE_DETECTION_ASSETS = {
+    "face_detection.js": ("text/javascript", True),
+    "face_detection_solution_wasm_bin.js": ("text/javascript", True),
+    "face_detection_solution_wasm_bin.wasm": ("application/wasm", True),
+    "face_detection_short.binarypb": ("application/octet-stream", False),
+    "face_detection_short_range.tflite": ("application/octet-stream", False),
+}
 MAX_CHALLENGES = 4096
 
 
@@ -180,7 +188,8 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Telegram-Init-Data"
         response.headers["Vary"] = "Origin"
-        response.headers["Cache-Control"] = "no-store"
+        if "Cache-Control" not in response.headers:
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     app.middlewares.append(security_middleware)
@@ -391,11 +400,30 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
             raise web.HTTPNotFound()
         return web.FileResponse(static_root / asset)
 
+    async def face_detection_asset(request: web.Request):
+        version = request.match_info["version"]
+        asset = request.match_info["asset"]
+        if version != FACE_DETECTION_VERSION or asset not in FACE_DETECTION_ASSETS:
+            raise web.HTTPNotFound()
+        content_type, compressed = FACE_DETECTION_ASSETS[asset]
+        path = static_root / "face_detection" / version / asset
+        if compressed:
+            path = path.with_name(path.name + ".gz")
+        if not path.is_file():
+            raise web.HTTPNotFound()
+        response = web.FileResponse(path)
+        response.headers["Content-Type"] = content_type
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        if compressed:
+            response.headers["Content-Encoding"] = "gzip"
+        return response
+
     async def options(request: web.Request):
         return web.Response(status=204)
 
     app.router.add_route("GET", "/", index_page)
     app.router.add_route("GET", "/{asset}", static_asset)
+    app.router.add_route("GET", "/face-detection/{version}/{asset}", face_detection_asset)
     app.router.add_route("POST", "/api/location-check", location_check)
     app.router.add_route("GET", "/api/challenge", challenge)
     app.router.add_route("POST", "/api/attendance", attendance)

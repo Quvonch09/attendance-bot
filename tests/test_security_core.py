@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import hmac
 import json
@@ -353,6 +354,29 @@ class SecurityCoreTests(unittest.TestCase):
                 asset = await client.get("/config.js", headers=trusted)
                 self.assertEqual(asset.status, 200)
                 self.assertIn("window.location.origin", await asset.text())
+                detector = await client.get(
+                    "/face-detection/v0.4.1646425229/face_detection.js", headers=trusted
+                )
+                self.assertEqual(detector.status, 200)
+                self.assertEqual(detector.headers.get("Content-Encoding"), "gzip")
+                self.assertEqual(detector.headers.get("Cache-Control"), "public, max-age=31536000, immutable")
+                detector_bytes = await detector.read()
+                if detector_bytes.startswith(b"\x1f\x8b"):
+                    detector_bytes = gzip.decompress(detector_bytes)
+                self.assertIn(b"FaceDetection", detector_bytes)
+                wasm = await client.get(
+                    "/face-detection/v0.4.1646425229/face_detection_solution_wasm_bin.wasm", headers=trusted
+                )
+                self.assertEqual(wasm.status, 200)
+                self.assertEqual(wasm.headers.get("Content-Type"), "application/wasm")
+                wasm_bytes = await wasm.read()
+                if wasm_bytes.startswith(b"\x1f\x8b"):
+                    wasm_bytes = gzip.decompress(wasm_bytes)
+                self.assertEqual(wasm_bytes[:4], b"\x00asm")
+                denied_asset = await client.get(
+                    "/face-detection/v0.4.1646425229/unknown.bin", headers=trusted
+                )
+                self.assertEqual(denied_asset.status, 404)
                 headers = {**trusted, "X-Telegram-Init-Data": raw}
                 challenge = await client.get("/api/challenge?action=checkin", headers=headers)
                 self.assertEqual(challenge.status, 200)
