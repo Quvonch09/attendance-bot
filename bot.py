@@ -471,9 +471,19 @@ def fmt_duration(value: timedelta | None) -> str:
 
 
 def build_report(work_day: str):
-    users = all_users()
-    lines = [f"📊 Kunlik davomat hisoboti — {work_day}", ""]
-    for user in users:
+    users = sorted(all_users(), key=lambda user: (str(user["full_name"]).casefold(), int(user["telegram_id"])))
+    sections = [
+        "📊 BUGUNGI DAVOMAT HISOBOTI\n"
+        f"📅 Sana: {work_day}\n"
+        f"👥 Xodimlar: {len(users)} ta"
+    ]
+    if not users:
+        sections.append("Faol va tasdiqlangan xodim topilmadi.")
+        return "\n\n".join(sections)
+
+    for index, user in enumerate(users, start=1):
+        uid = int(user["telegram_id"])
+        name = " ".join(str(user["full_name"]).split())
         rows = events_for_user(user["telegram_id"], work_day)
         by_kind = {r["kind"]: r for r in rows}
         checkin = by_kind.get("checkin")
@@ -481,7 +491,7 @@ def build_report(work_day: str):
         lunch_in = by_kind.get("lunch_in")
         checkout = by_kind.get("checkout")
         delay = late_minutes(checkin["happened_at"] if checkin else None)
-        delay_label = f"{delay} daqiqa" if checkin and delay else ("kechikmagan" if checkin else "kelish qayd etilmagan")
+        delay_label = f"{delay} daqiqa kechikdi" if checkin and delay else ("o‘z vaqtida" if checkin else "kelish qayd etilmagan")
         net = compute_net_work(by_kind)
         missing = []
         if not lunch_out:
@@ -492,23 +502,67 @@ def build_report(work_day: str):
             missing.append("18:00 chiqish qayd etilmagan")
         explanation = get_explanation(user["telegram_id"], work_day)
         if explanation:
-            reason_text = explanation["text"] or "ovozli izoh (nazoratchilarga yuborilgan)"
-            note = f"\n  Kechikish izohi ({explanation['kind']}): {reason_text}"
+            reason_text = str(explanation["text"] or "ovozli izoh (nazoratchilarga yuborilgan)").strip()
+            reason_text = reason_text.replace("\n", "\n   ")
+            reason_line = f"📝 Kechikish izohi ({explanation['kind']}): {reason_text}"
         else:
-            note = ""
-        lines.append(
-            f"• {user['full_name']}\n"
-            f"  Kelish: {hhmm(checkin['happened_at']) if checkin else '—'}; kechikish: {delay_label}\n"
-            f"  Tushlik: {hhmm(lunch_out['happened_at']) if lunch_out else '—'}–{hhmm(lunch_in['happened_at']) if lunch_in else '—'}; "
-            f"chiqish: {hhmm(checkout['happened_at']) if checkout else '—'}\n"
-            f"  Ish vaqti: {fmt_duration(net)}"
-            f"{'; ' + ', '.join(missing) if missing else ''}{note}"
+            reason_line = "📝 Kechikish izohi: yo‘q"
+        sections.append(
+            "\n".join(
+                [
+                    "━━━━━━━━━━━━━━━━━━━━",
+                    f"👤 Xodim #{index} — {name} (Telegram ID oxiri: {str(uid)[-4:].zfill(4)})",
+                    f"✅ Kelish: {hhmm(checkin['happened_at']) if checkin else '—'}",
+                    f"⏱ Kechikish: {delay_label}",
+                    f"🍽 Tushlikka chiqish: {hhmm(lunch_out['happened_at']) if lunch_out else '—'}",
+                    f"🔙 Tushlikdan qaytish: {hhmm(lunch_in['happened_at']) if lunch_in else '—'}",
+                    f"🏁 Ishdan chiqish: {hhmm(checkout['happened_at']) if checkout else '—'}",
+                    f"🕒 Sof ish vaqti: {fmt_duration(net)}",
+                    f"⚠️ Yetishmayotgan tasdiqlar: {'; '.join(missing) if missing else 'yo‘q'}",
+                    reason_line,
+                ]
+            )
         )
-    return "\n".join(lines)
+    return "\n\n".join(sections)
+
+
+def split_message(text: str, max_length: int = 3800) -> list[str]:
+    text = str(text or "")
+    if len(text) <= max_length:
+        return [text]
+    if max_length <= len("↪️ Davomi\n\n"):
+        raise ValueError("max_length is too small for a continuation label")
+    chunks = []
+    remaining = text
+    while remaining:
+        prefix = "" if not chunks else "↪️ Davomi\n\n"
+        capacity = max_length - len(prefix)
+        if len(remaining) <= capacity:
+            chunks.append(prefix + remaining)
+            break
+        split_at = remaining.rfind("\n\n", 0, capacity + 1)
+        if split_at <= 0:
+            split_at = remaining.rfind("\n", 0, capacity + 1)
+        if split_at <= 0:
+            split_at = capacity
+        chunk = remaining[:split_at].rstrip()
+        if not chunk:
+            split_at = capacity
+            chunk = remaining[:split_at]
+        chunks.append(prefix + chunk)
+        remaining = remaining[split_at:].lstrip("\n")
+    return chunks or [""]
+
+
+async def send_report(message: Message, work_day: str, reply_markup=None):
+    chunks = split_message(build_report(work_day))
+    for index, chunk in enumerate(chunks):
+        kwargs = {"reply_markup": reply_markup} if reply_markup is not None and index == len(chunks) - 1 else {}
+        await message.answer(chunk, **kwargs)
 
 
 async def notify_admins(bot: Bot, text: str):
-    chunks = [text[i:i + 3800] for i in range(0, len(text), 3800)] or [""]
+    chunks = split_message(text)
     for admin_id in REVIEWER_IDS:
         for chunk in chunks:
             try:
@@ -844,7 +898,7 @@ async def main():
     async def today_command(message: Message):
         if message.from_user.id not in REVIEWER_IDS:
             return
-        await message.answer(build_report(day_key()))
+        await send_report(message, day_key())
 
     @dp.message(Command("live"))
     async def live_command(message: Message):
@@ -1193,7 +1247,7 @@ async def main():
         if message.from_user.id not in REVIEWER_IDS:
             await message.answer("Bu bo‘lim faqat nazoratchilar uchun.")
             return
-        await message.answer(build_report(day_key()), reply_markup=main_keyboard(message.from_user.id))
+        await send_report(message, day_key(), reply_markup=main_keyboard(message.from_user.id))
 
     @dp.message(F.text == "📍 Jonli holat")
     async def live_button(message: Message):

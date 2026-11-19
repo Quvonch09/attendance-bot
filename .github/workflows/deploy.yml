@@ -32,7 +32,7 @@ jobs:
       - name: Check Python syntax and security regressions
         run: |
           python -m py_compile bot.py webapp_api.py
-          python tests/test_security_core.py -v
+          python -m unittest discover -s tests -v
 
       - name: Check Web App JavaScript syntax
         run: node --check webapp/app.js
