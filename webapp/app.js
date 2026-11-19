@@ -29,6 +29,13 @@
       ? 'iPhone’da Sozlamalar → Maxfiylik va xavfsizlik → Joylashuv xizmatlari → Telegram ichida “Aniq joylashuv”ni yoqing.'
       : 'Android’da Sozlamalar → Joylashuv → Google Location Accuracy-ni va Telegram uchun aniq joylashuv ruxsatini yoqing.';
   }
+  function locationSourceLabel(source){
+    return source==='telegram'?'Telegram LocationManager':source==='browser'?'Telegram WebView GPS':'';
+  }
+  function appendLocationSource(message,source){
+    const label=locationSourceLabel(source);
+    return label?`${message} GPS manbasi: ${label}.`:message;
+  }
   function apiError(code, status, data = {}){
     if(code==='location_accuracy_insufficient'){
       const accuracy=Number(data.accuracy_m);
@@ -38,7 +45,9 @@
     if(code==='outside_office_radius'){
       const distance=Number(data.distance_m);
       const distanceText=Number.isFinite(distance)?` Server hisoblagan masofa taxminan ${Math.round(distance)} m.`:'';
-      return `GPS o‘lchovi ofisning 300 m hududidan tashqarini ko‘rsatdi.${distanceText} Agar ofisda bo‘lsangiz, ${locationPermissionHelp()} va ochiq joyda qayta tekshiring. Davomat qayd etilmadi; radius o‘zgarmagan.`;
+      const accuracy=Number(data.accuracy_m);
+      const accuracyText=Number.isFinite(accuracy)&&accuracy>0?` Qurilma bildirgan GPS aniqligi: ±${Math.round(accuracy)} m.`:' Qurilma bildirgan GPS aniqligi mavjud emas.';
+      return `Qurilma yuborgan GPS nuqtasi ofisning 300 m radiusidan tashqarida.${distanceText}${accuracyText} Ruxsat yoqilgan bo‘lsa ham, ayni GPS o‘lchovi xato bo‘lishi mumkin. Agar ofisda bo‘lsangiz, ochiq joyda 10–20 soniya kutib, “GPSni qayta tekshirish”ni bosing. Davomat qayd etilmadi; radius o‘zgarmagan.`;
     }
     return ({
       unauthorized:'Telegram tekshiruvi o‘tmadi. Web App-ni bot ichidan qayta oching.',
@@ -90,7 +99,7 @@
   function requestBrowserLocation(){
     if(!navigator.geolocation)return Promise.reject(locationError('Bu Telegram WebView’da joylashuv API mavjud emas. Telegram-ni yangilang yoki joylashuv ruxsatini tekshiring.'));
     const operation=new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(position=>{
-      try{resolve(normalizePosition(position));}catch(error){reject(error);}
+      try{const normalized=normalizePosition(position);normalized.source='browser';resolve(normalized);}catch(error){reject(error);}
     },error=>{
       reject(locationError(error.code===1?`Joylashuvga ruxsat berilmadi. ${locationPermissionHelp()}`:error.code===2?'GPS joylashuv aniqlanmadi. Ochiq joyda qayta urinib ko‘ring.':'GPS so‘rovi vaqti tugadi. Ochiq joyda qayta urinib ko‘ring.'));
     },{enableHighAccuracy:true,timeout:20000,maximumAge:0}));
@@ -108,7 +117,7 @@
             if(!location){fail(`Telegram orqali joylashuvga ruxsat berilmadi. ${locationPermissionHelp()}`);return;}
             const latitude=Number(location.latitude),longitude=Number(location.longitude),accuracy=Number(location.horizontal_accuracy);
             if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude < -90||latitude > 90||longitude < -180||longitude > 180){fail('Telegram joylashuv xizmatidan to‘g‘ri koordinata olinmadi. Qayta urinib ko‘ring.');return;}
-            if(Number.isFinite(accuracy)&&accuracy>0){resolve({coords:{latitude,longitude,accuracy}});return;}
+            if(Number.isFinite(accuracy)&&accuracy>0){resolve({coords:{latitude,longitude,accuracy},source:'telegram'});return;}
             if(navigator.geolocation){requestBrowserLocation().then(resolve,reject);return;}
             fail(`Telegram bu safar joylashuv aniqligini bermadi. ${locationPermissionHelp()} Ochiq joyda qayta urinib ko‘ring.`,'LocationAccuracyUnavailableError');
           });
@@ -153,7 +162,7 @@
       response=await fetch(`${api}/api/location-check`,{method:'POST',headers:{...headers(),'Content-Type':'application/json'},body:JSON.stringify({latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy_m:position.coords.accuracy})});
     }catch(_){throw locationError('GPS tekshiruv serveriga ulanib bo‘lmadi. Internetni tekshirib, qayta urinib ko‘ring.','LocationCheckNetworkError');}
     let data={};try{data=await response.json();}catch(_){ }
-    if(!response.ok){const error=Error(apiError(data.error,response.status,data));error.name=data.error||'LocationCheckError';error.locationFailure=true;throw error;}
+    if(!response.ok){const error=Error(apiError(data.error,response.status,data));error.name=data.error||'LocationCheckError';error.locationFailure=true;error.locationSource=position.source;throw error;}
     return data;
   }
   async function start(){
@@ -185,7 +194,7 @@
       const position=await requestLocation();
       if(stopped)return;
       if(!hasLiveCamera()){const error=Error('Kamera oqimi joylashuv so‘rovi paytida to‘xtadi. Kamerani qayta boshlang.');error.name='CameraStreamEndedError';error.cameraFailure=true;throw error;}
-      coords={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy_m:position.coords.accuracy};
+      coords={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy_m:position.coords.accuracy,source:position.source};
       $('location-status').textContent=`GPS aniqligi ±${Math.round(coords.accuracy_m)} m · ofis hududi tekshirilmoqda…`;
       const location=await checkLocationOnServer(position);
       if(stopped)return;
@@ -199,7 +208,8 @@
     }catch(error){
       if(stopped){busy=false;return;}
       if(cameraPromise)cameraPromise.then(pending=>{if(pending!==stream&&pending.getTracks().some(track=>track.readyState==='live'))pending.getTracks().forEach(track=>track.stop());}).catch(()=>{});
-      const message=error.cameraFailure?cameraErrorMessage(error):(error.message||'Tekshiruvni boshlashda xatolik.');
+      let message=error.cameraFailure?cameraErrorMessage(error):(error.message||'Tekshiruvni boshlashda xatolik.');
+      if(error.locationFailure&&error.locationSource)message=appendLocationSource(message,error.locationSource);
       if(error.cameraFailure||!hasLiveCamera())stopCamera();
       else{$('camera-placeholder').hidden=true;$('video-wrap').classList.add('ready');$('camera-status').textContent='Old kamera tayyor';$('stop-button').hidden=false;}
       if(error.cameraFailure){$('camera-status').textContent=message;$('start-button').textContent='Kamerani qayta boshlash →';}
@@ -225,12 +235,12 @@
       if(stopped)throw Error('Tekshiruv to‘xtatildi.');$('capture-status').textContent='Serverga yuborilmoqda…';setNotice('Kadrlar serverga yuborilmoqda…');
       const form=new FormData();form.append('challenge_id',challenge.challenge_id);form.append('action',action());form.append('latitude',String(coords.latitude));form.append('longitude',String(coords.longitude));form.append('accuracy_m',String(coords.accuracy_m));frames.forEach((blob,i)=>form.append('frames',blob,`frame-${i+1}.jpg`));
       const res=await fetch(`${api}/api/attendance`,{method:'POST',headers:headers(),body:form});let data={};try{data=await res.json();}catch(_){ }
-      if(!res.ok)throw Error(apiError(data.error||data.detail||data.message,res.status,data));
+      if(!res.ok){const code=data.error||data.detail||data.message;const error=Error(apiError(code,res.status,data));if(code==='outside_office_radius'||code==='location_accuracy_insufficient'){error.locationFailure=true;error.locationSource=coords.source;}throw error;}
       stopCamera();busy=false;markDone('step-motion');$('capture-status').textContent='Tekshiruv yakunlandi';$('progress').style.width='100%';$('capture-button').hidden=true;$('stop-button').hidden=true;$('retry-button').hidden=true;setNotice(data.message||`${labels[action()].charAt(0).toUpperCase()+labels[action()].slice(1)} muvaffaqiyatli qayd etildi.`,'success');
     }catch(error){
       if(stopped){$('capture-count').textContent='0 / 5';$('capture-status').textContent='5 ta kadr olinadi';$('progress').style.width='0';}
       busy=false;$('capture-button').hidden=true;$('retry-button').hidden=false;$('stop-button').hidden=!hasLiveCamera();$('start-button').hidden=true;
-      setNotice(error.message||'Kadrlarni olishda xatolik.','error');
+      let message=error.message||'Kadrlarni olishda xatolik.';if(error.locationFailure&&error.locationSource)message=appendLocationSource(message,error.locationSource);setNotice(message,'error');
     }
   }
   $('action-select').addEventListener('change',()=>{$('start-button').textContent='Tekshiruvni boshlash →';challenge=null;coords=null;stopCamera();$('start-button').hidden=false;$('start-button').disabled=false;$('capture-button').hidden=true;$('retry-button').hidden=true;setNotice(`${labels[action()]} uchun GPS aniqligi, yuz mosligi va bir martalik harakat tekshiruvi bajariladi.`);});

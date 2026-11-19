@@ -180,6 +180,14 @@ class SecurityCoreTests(unittest.TestCase):
         self.assertEqual(classify_location(100, 0, 300), "location_accuracy_insufficient")
         self.assertEqual(classify_location(100, 100_001, 300), "location_accuracy_insufficient")
 
+    def test_haversine_uses_latitude_longitude_order_and_returns_meters(self):
+        self.assertAlmostEqual(bot.distance_from_office(bot.OFFICE_LAT, bot.OFFICE_LON), 0, places=6)
+        north_offset_m = bot.distance_from_office(bot.OFFICE_LAT + 0.001, bot.OFFICE_LON)
+        self.assertGreater(north_offset_m, 100)
+        self.assertLess(north_offset_m, 120)
+        swapped = bot.distance_from_office(bot.OFFICE_LON, bot.OFFICE_LAT)
+        self.assertGreater(swapped, 1_000_000)
+
     def test_location_preflight_distinguishes_uncertain_from_clearly_outside(self):
         async def scenario():
             token, now = "45678:location-accuracy-token", int(time.time())
@@ -213,7 +221,10 @@ class SecurityCoreTests(unittest.TestCase):
                                             json={"latitude": 3.0, "longitude": 2.0,
                                                   "accuracy_m": 50, "distance_m": 0})
                 self.assertEqual(outside.status, 403)
-                self.assertEqual((await outside.json())["error"], "outside_office_radius")
+                outside_payload = await outside.json()
+                self.assertEqual(outside_payload["error"], "outside_office_radius")
+                self.assertEqual(outside_payload["distance_m"], 360)
+                self.assertEqual(outside_payload["accuracy_m"], 50)
 
                 missing_accuracy = await client.post("/api/location-check", headers=headers,
                                                      json={"latitude": 4.0, "longitude": 2.0})

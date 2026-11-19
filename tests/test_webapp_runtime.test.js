@@ -47,7 +47,7 @@ function response(body, status = 200) {
   return {ok: status >= 200 && status < 300, status, json: async () => body};
 }
 
-function createWebView({platform, useTelegramLocation}) {
+function createWebView({platform, useTelegramLocation, outsideFirst = false}) {
   const elements = new Map();
   const getElement = (id) => {
     if (!elements.has(id)) elements.set(id, makeElement(id));
@@ -76,7 +76,7 @@ function createWebView({platform, useTelegramLocation}) {
     init(callback) { callback(); },
     getLocation(callback) {
       locationReads += 1;
-      callback({latitude: 38.8557873, longitude: 65.8002788, horizontal_accuracy: locationReads === 1 ? 350 : 20});
+      callback({latitude: 38.8557873, longitude: 65.8002788, horizontal_accuracy: outsideFirst ? 25 : locationReads === 1 ? 350 : 20});
     },
   } : undefined;
   const webApp = {
@@ -120,6 +120,9 @@ function createWebView({platform, useTelegramLocation}) {
       locationPayloads.push(payload);
       assert.equal(payload.latitude, 38.8557873);
       assert.equal(payload.longitude, 65.8002788);
+      if (outsideFirst && locationCheckCalls === 1) {
+        return response({error: 'outside_office_radius', distance_m: 1077, accuracy_m: payload.accuracy_m}, 403);
+      }
       if (locationCheckCalls === 1) {
         return response({error: 'location_accuracy_insufficient', distance_m: 280, accuracy_m: payload.accuracy_m}, 422);
       }
@@ -189,4 +192,20 @@ test('Android browser geolocation accuracy retry keeps the camera live', async (
   assert.equal(environment.browserLocationReads(), 2);
   assert.equal(environment.locationPayloads[0].accuracy_m, 350);
   assert.equal(environment.locationPayloads[1].accuracy_m, 20);
+});
+
+test('Android Telegram outside result shows distance, accuracy and source without stopping camera', async () => {
+  const environment = createWebView({platform: 'android', useTelegramLocation: true, outsideFirst: true});
+  const start = environment.elements.get('start-button');
+  await start.click();
+  const message = environment.elements.get('notice').textContent;
+  assert.match(message, /1077 m/);
+  assert.match(message, /±25 m/);
+  assert.match(message, /Telegram LocationManager/);
+  assert.match(message, /Ruxsat yoqilgan bo‘lsa ham/);
+  assert.match(message, /Davomat qayd etilmadi/);
+  assert.doesNotMatch(message, /38\.8557873|65\.8002788/);
+  assert.equal(environment.track.stopCalls, 0);
+  assert.equal(environment.elements.get('video').srcObject, environment.cameraStream);
+  assert.equal(start.textContent, 'GPSni qayta tekshirish →');
 });
