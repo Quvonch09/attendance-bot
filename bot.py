@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ContentType
 from aiogram.filters import Command, CommandStart
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
@@ -162,6 +163,110 @@ def pending_users():
         return con.execute("SELECT * FROM users WHERE active=1 AND approved=0 ORDER BY created_at").fetchall()
 
 
+EMPLOYEE_PAGE_SIZE = 8
+
+
+def admin_employee_counts():
+    with db_connect() as con:
+        row = con.execute(
+            """SELECT COUNT(*) AS total,
+                      COALESCE(SUM(CASE WHEN active=1 THEN 1 ELSE 0 END),0) AS active,
+                      COALESCE(SUM(CASE WHEN active=1 AND approved=1 THEN 1 ELSE 0 END),0) AS approved,
+                      COALESCE(SUM(CASE WHEN active=1 AND approved=0 THEN 1 ELSE 0 END),0) AS pending,
+                      COALESCE(SUM(CASE WHEN active=0 THEN 1 ELSE 0 END),0) AS inactive
+               FROM users"""
+        ).fetchone()
+    return {key: int(row[key] or 0) for key in ("total", "active", "approved", "pending", "inactive")}
+
+
+def admin_employee_page(page: int = 0):
+    try:
+        page = max(0, int(page))
+    except (TypeError, ValueError):
+        page = 0
+    with db_connect() as con:
+        total = int(con.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+        page_count = max(1, (total + EMPLOYEE_PAGE_SIZE - 1) // EMPLOYEE_PAGE_SIZE)
+        page = min(page, page_count - 1)
+        rows = con.execute(
+            "SELECT * FROM users ORDER BY active DESC,approved DESC,full_name COLLATE NOCASE,telegram_id LIMIT ? OFFSET ?",
+            (EMPLOYEE_PAGE_SIZE, page * EMPLOYEE_PAGE_SIZE),
+        ).fetchall()
+    return page, total, rows
+
+
+def employee_profile_access_error(uid: int, chat_type):
+    if uid not in REVIEWER_IDS:
+        return "Bu bo‘lim faqat nazoratchilar uchun."
+    if getattr(chat_type, "value", chat_type) != "private":
+        return "Xodim profillari faqat bot bilan shaxsiy chatda ko‘rsatiladi."
+    return None
+
+
+def employee_status(row) -> str:
+    if not row["active"]:
+        return "Faol emas"
+    return "Tasdiqlangan" if row["approved"] else "Tasdiq kutmoqda"
+
+
+def employee_face_file(row):
+    try:
+        photo = Path(row["face_path"]).resolve(strict=True)
+        photo.relative_to(FACES_DIR.resolve())
+        return photo if photo.is_file() else None
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def employee_profile_text(row) -> str:
+    lines = [
+        "👤 Xodim profili",
+        f"Ism: {row['full_name']}",
+        f"Telegram ID: {row['telegram_id']}",
+        f"Holati: {employee_status(row)}",
+        f"Ro‘yxatdan o‘tgan: {row['created_at'] or '—'}",
+    ]
+    if row["approved"]:
+        lines.append(f"Tasdiqlagan nazoratchi ID: {row['approved_by'] or '—'}")
+        lines.append(f"Tasdiqlangan vaqt: {row['approved_at'] or '—'}")
+    return "\n".join(lines)
+
+
+def employee_profile_keyboard(page: int, list_message_id: int):
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩️ Xodimlar ro‘yxatiga qaytish", callback_data=f"emp:back:{page}:{list_message_id}")
+    ]])
+
+
+def employee_directory_view(page: int = 0):
+    page, total, rows = admin_employee_page(page)
+    counts = admin_employee_counts()
+    page_count = max(1, (total + EMPLOYEE_PAGE_SIZE - 1) // EMPLOYEE_PAGE_SIZE)
+    lines = [
+        f"👥 Jami ro‘yxatda: {counts['total']} xodim",
+        f"Faol: {counts['active']} · tasdiqlangan: {counts['approved']} · kutmoqda: {counts['pending']}",
+        f"Faol emas: {counts['inactive']}",
+        "",
+        f"Profilni tanlang ({page + 1}/{page_count}):" if rows else "Xodimlar ro‘yxati bo‘sh.",
+    ]
+    keyboard = []
+    for row in rows:
+        badge = "⛔" if not row["active"] else ("✅" if row["approved"] else "⏳")
+        name = " ".join(str(row["full_name"]).split())[:28]
+        keyboard.append([InlineKeyboardButton(
+            text=f"{badge} {name} · {row['telegram_id']}",
+            callback_data=f"emp:profile:{row['telegram_id']}:{page}",
+        )])
+    navigation = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton(text="⬅️ Oldingi", callback_data=f"emp:list:{page - 1}"))
+    if page + 1 < page_count:
+        navigation.append(InlineKeyboardButton(text="Keyingi ➡️", callback_data=f"emp:list:{page + 1}"))
+    if navigation:
+        keyboard.append(navigation)
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=keyboard) if keyboard else None
+
+
 def set_pending(uid: int, task: str, step: str, payload: dict | None = None):
     with db_connect() as con:
         con.execute(
@@ -247,7 +352,7 @@ def main_keyboard(uid: int | None = None):
     if uid is not None and uid in REVIEWER_IDS:
         keyboard.extend([
             [KeyboardButton(text="📊 Bugungi hisobot"), KeyboardButton(text="📍 Jonli holat")],
-            [KeyboardButton(text="🧑‍💼 Yuz tasdiqlari")],
+            [KeyboardButton(text="👥 Xodimlar"), KeyboardButton(text="🧑‍💼 Yuz tasdiqlari")],
         ])
     return ReplyKeyboardMarkup(keyboard=keyboard, is_persistent=True, resize_keyboard=True)
 
@@ -700,6 +805,14 @@ async def main():
     bot = Bot(BOT_TOKEN)
     dp = Dispatcher()
 
+    async def send_employee_directory(message: Message, page: int = 0):
+        denied = employee_profile_access_error(message.from_user.id, message.chat.type)
+        if denied:
+            await message.answer(denied)
+            return
+        text, keyboard = employee_directory_view(page)
+        await message.answer(text, reply_markup=keyboard)
+
     @dp.message(CommandStart())
     async def command_start(message: Message):
         uid = message.from_user.id
@@ -722,6 +835,10 @@ async def main():
         await message.answer(
             "Davomat tugmalari: ishga kelish (lokatsiya + video-selfi), tushlikka chiqish, tushlikdan qaytish, ishdan chiqish. Nazoratchilar /today, /live va /pending orqali nazorat qiladi. Shaxsiy ma’lumotlarni o‘chirish uchun /delete_me buyrug‘idan foydalaning."
         )
+
+    @dp.message(Command("employees"))
+    async def employees_command(message: Message):
+        await send_employee_directory(message)
 
     @dp.message(Command("today"))
     async def today_command(message: Message):
@@ -809,6 +926,79 @@ async def main():
         if callback.message:
             await callback.message.edit_caption(caption=final_caption, reply_markup=None)
         await callback.answer("Bajarildi.")
+
+    @dp.callback_query(F.data.startswith("emp:list:"))
+    async def employee_list_page_callback(callback: CallbackQuery):
+        chat_type = callback.message.chat.type if callback.message else None
+        denied = employee_profile_access_error(callback.from_user.id, chat_type)
+        if denied:
+            await callback.answer(denied, show_alert=True)
+            return
+        try:
+            page = int(callback.data.split(":", 2)[2])
+        except (ValueError, IndexError):
+            await callback.answer("Ro‘yxat so‘rovi noto‘g‘ri.", show_alert=True)
+            return
+        text, keyboard = employee_directory_view(page)
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                await callback.answer("Xodimlar ro‘yxatini yangilab bo‘lmadi.", show_alert=True)
+                return
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("emp:profile:"))
+    async def employee_profile_callback(callback: CallbackQuery):
+        chat_type = callback.message.chat.type if callback.message else None
+        denied = employee_profile_access_error(callback.from_user.id, chat_type)
+        if denied:
+            await callback.answer(denied, show_alert=True)
+            return
+        try:
+            _, _, uid_text, page_text = callback.data.split(":", 3)
+            employee_id, page = int(uid_text), max(0, int(page_text))
+        except (ValueError, IndexError):
+            await callback.answer("Xodim profili so‘rovi noto‘g‘ri.", show_alert=True)
+            return
+        row = get_any_user(employee_id)
+        if not row:
+            await callback.answer("Xodim profili topilmadi.", show_alert=True)
+            return
+        profile = employee_profile_text(row)
+        keyboard = employee_profile_keyboard(page, callback.message.message_id)
+        photo = employee_face_file(row)
+        if photo:
+            await callback.bot.send_photo(callback.message.chat.id, FSInputFile(photo), caption=profile, reply_markup=keyboard)
+        else:
+            await callback.bot.send_message(callback.message.chat.id, profile + "\n\nYuz surati topilmadi.", reply_markup=keyboard)
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("emp:back:"))
+    async def employee_profile_back_callback(callback: CallbackQuery):
+        chat_type = callback.message.chat.type if callback.message else None
+        denied = employee_profile_access_error(callback.from_user.id, chat_type)
+        if denied:
+            await callback.answer(denied, show_alert=True)
+            return
+        try:
+            _, _, page_text, message_text = callback.data.split(":", 3)
+            page, list_message_id = max(0, int(page_text)), int(message_text)
+        except (ValueError, IndexError):
+            await callback.answer("Ro‘yxatga qaytish so‘rovi noto‘g‘ri.", show_alert=True)
+            return
+        try:
+            await callback.message.delete()
+        except TelegramBadRequest:
+            pass
+        text, keyboard = employee_directory_view(page)
+        try:
+            await callback.bot.edit_message_text(
+                text, chat_id=callback.message.chat.id, message_id=list_message_id, reply_markup=keyboard
+            )
+        except TelegramBadRequest:
+            await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
+        await callback.answer()
 
     @dp.message(Command("delete_me"))
     async def delete_me(message: Message):
@@ -1015,6 +1205,10 @@ async def main():
         lines = [f"📍 Bugungi jonli holat — {day_key()}"]
         lines.extend(f"• {u['full_name']}: {last[u['telegram_id']]['kind']} {hhmm(last[u['telegram_id']]['happened_at'])}" if u["telegram_id"] in last else f"• {u['full_name']}: hali belgi yo‘q" for u in all_users())
         await message.answer("\n".join(lines), reply_markup=main_keyboard(message.from_user.id))
+
+    @dp.message(F.text == "👥 Xodimlar")
+    async def employees_button(message: Message):
+        await send_employee_directory(message)
 
     @dp.message(F.text == "🧑‍💼 Yuz tasdiqlari")
     async def face_reviews_button(message: Message):

@@ -50,6 +50,55 @@ class SecurityCoreTests(unittest.TestCase):
         texts = [button.text for row in keyboard for button in row]
         self.assertEqual(texts, ["✅ Ishga keldim", "🍽 Tushlikka", "🔙 Tushlikdan qaytdim", "🏁 Ishdan chiqdim"])
 
+    def test_owner_and_second_admin_keep_employee_and_admin_controls(self):
+        attendance = ["✅ Ishga keldim", "🍽 Tushlikka", "🔙 Tushlikdan qaytdim", "🏁 Ishdan chiqdim"]
+        for uid in (8048583227, 1922170479):
+            texts = [button.text for row in bot.main_keyboard(uid=uid).keyboard for button in row]
+            self.assertEqual(texts[:4], attendance)
+            self.assertIn("👥 Xodimlar", texts)
+            self.assertIn("🧑‍💼 Yuz tasdiqlari", texts)
+
+    def test_employee_profiles_are_reviewer_only_and_private_chat_only(self):
+        self.assertIsNone(bot.employee_profile_access_error(8048583227, "private"))
+        self.assertIsNone(bot.employee_profile_access_error(1922170479, "private"))
+        self.assertIsNotNone(bot.employee_profile_access_error(123456789, "private"))
+        self.assertIsNotNone(bot.employee_profile_access_error(8048583227, "group"))
+
+    def test_admin_employee_directory_counts_and_lists_all_statuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_db = bot.DB_PATH
+            bot.DB_PATH = Path(directory) / "attendance.sqlite3"
+            try:
+                bot.init_db()
+                test_rows = [
+                    (10001, "Approved Employee", "approved.jpg", "2026-01-01", "2026-01-01", 1, 1),
+                    (10002, "Pending Employee", "pending.jpg", "2026-01-02", "2026-01-02", 1, 0),
+                    (10003, "Inactive Employee", "inactive.jpg", "2026-01-03", "2026-01-03", 0, 0),
+                ]
+                with bot.db_connect() as con:
+                    con.executemany(
+                        "INSERT INTO users(telegram_id,full_name,face_path,consent_at,created_at,active,approved) VALUES(?,?,?,?,?,?,?)",
+                        test_rows,
+                    )
+                self.assertEqual(
+                    bot.admin_employee_counts(),
+                    {"total": 3, "active": 2, "approved": 1, "pending": 1, "inactive": 1},
+                )
+                page, total, rows = bot.admin_employee_page()
+                self.assertEqual((page, total, len(rows)), (0, 3, 3))
+                text, markup = bot.employee_directory_view()
+                self.assertIn("Jami ro‘yxatda: 3 xodim", text)
+                self.assertIn("Faol: 2", text)
+                self.assertIn("tasdiqlangan: 1", text)
+                self.assertIn("kutmoqda: 1", text)
+                self.assertIn("Faol emas: 1", text)
+                callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+                self.assertIn("emp:profile:10001:0", callbacks)
+                self.assertIn("emp:profile:10002:0", callbacks)
+                self.assertIn("emp:profile:10003:0", callbacks)
+            finally:
+                bot.DB_PATH = original_db
+
     def test_webapp_action_url_sets_action_and_keeps_existing_query(self):
         original_url = bot.WEBAPP_URL
         bot.WEBAPP_URL = "https://app.example.test/attendance?source=telegram"
