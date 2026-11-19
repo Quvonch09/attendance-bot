@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 APP_JS = (Path(__file__).resolve().parents[1] / "webapp" / "app.js").read_text(encoding="utf-8")
+CSS = (Path(__file__).resolve().parents[1] / "webapp" / "styles.css").read_text(encoding="utf-8")
 
 
 class WebAppPermissionFlowTests(unittest.TestCase):
@@ -35,6 +36,11 @@ class WebAppPermissionFlowTests(unittest.TestCase):
         self.assertIn("if(error.cameraFailure||!hasLiveCamera())stopCamera()", APP_JS)
         self.assertIn("iPhone’da Sozlamalar", APP_JS)
         self.assertIn("Android’da Sozlamalar", APP_JS)
+
+    def test_green_face_confirmation_requires_server_success(self):
+        capture = APP_JS.split("async function capture()", 1)[1].split("$('action-select')", 1)[0]
+        self.assertLess(capture.index("if(!res.ok)"), capture.index("classList.add('confirmed')"))
+        self.assertIn(".video-wrap.confirmed .face-guide", CSS)
 
 
 if __name__ == "__main__":

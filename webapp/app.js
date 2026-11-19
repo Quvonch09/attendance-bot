@@ -7,6 +7,7 @@
   if (user && user.first_name) $('greeting').textContent = `Xush kelibsiz, ${user.first_name}`;
   const api = String(window.ATTENDANCE_API_BASE || '').trim().replace(/\/$/, '');
   let stream = null, coords = null, challenge = null, busy = false, stopped = false;
+  let autoCaptureTimer = null, successTimer = null;
   const action = () => $('action-select').value;
   const labels = {checkin:'kelish', lunch_out:'tushlikka chiqish', lunch_in:'tushlikdan qaytish', checkout:'ishdan chiqish'};
   const requestedAction = new URLSearchParams(window.location.search).get('action');
@@ -54,7 +55,9 @@
       not_approved:'Ro‘yxatdagi yuzingiz hali admin yoki nazoratchi tomonidan tasdiqlanmagan.',
       already_checked_in:'Bugungi kelishingiz avval qayd etilgan.', duplicate_action:'Bu amal bugun allaqachon qayd etilgan.', sequence_invalid:'Bu amal davomat ketma-ketligiga mos kelmaydi.', invalid_action:'Noto‘g‘ri davomat amali.',
       late_reason_required:'09:30 dan keyin kelayotgan bo‘lsangiz, bot chatiga kechikish sababini matn yoki ovozda yuboring, keyin qayta urinib ko‘ring.',
-      face_check_failed:'Yuz yoki harakat tekshiruvi o‘tmadi. Kameraga aniq qarab, topshiriqni bajaring va qayta urinib ko‘ring.',
+      motion_check_failed:'Yuz kadrda aniq ko‘rinmadi yoki topshiriqdagi harakat sezilmadi. Yuzni ramkada ushlab, ko‘rsatilgan tomonga sekin buring va yorug‘ joyda qayta urinib ko‘ring. Bu oddiy harakat tekshiruvi, sertifikatlangan liveness emas.',
+      face_match_failed:'Kadrdagi yuz tasdiqlangan profil suratiga mos kelmadi. Yuzni to‘liq va yorug‘ joyda ko‘rsating. Qaytalansa, administrator profil suratini tekshirsin.',
+      face_check_failed:'Yuz yoki harakat tekshiruvi o‘tmadi. Yuzni yaxshi yoritilgan joyda ko‘rsating va ko‘rsatilgan harakatni bajaring.',
       challenge_expired:'Harakat topshirig‘i muddati tugadi. Tekshiruvni qayta boshlang.',
       service_unavailable:'Davomat API hali sozlanmagan. Birozdan so‘ng qayta urinib ko‘ring.',
       origin_denied:'Web App manzili API tomonidan ruxsat etilmagan.',
@@ -133,10 +136,12 @@
     return stream.getVideoTracks().some(track=>track.readyState==='live');
   }
   function stopCamera(){
+    if(autoCaptureTimer!==null){clearTimeout(autoCaptureTimer);autoCaptureTimer=null;}
+    if(successTimer!==null){clearTimeout(successTimer);successTimer=null;}
     const current=stream;stream=null;
     if(current)current.getTracks().forEach(track=>track.stop());
     const video=$('video');if(typeof video.pause==='function')video.pause();video.srcObject=null;
-    $('video-wrap')?.classList.remove('ready');$('camera-placeholder').hidden=false;$('stop-button').hidden=true;
+    $('video-wrap')?.classList.remove('ready','confirmed');$('camera-placeholder').hidden=false;$('stop-button').hidden=true;
   }
   function watchCameraStream(cameraStream){
     cameraStream.getVideoTracks().forEach(track=>{
@@ -204,7 +209,10 @@
       if(!res.ok)throw Error(apiError(challengeData.error,res.status,challengeData));
       challenge=challengeData;if(!challenge.challenge_id||!challenge.instruction)throw Error('Server topshirig‘i javobida kerakli ma’lumotlar yo‘q.');
       $('instruction').textContent=challenge.instruction;$('motion-status').textContent='Topshiriq tayyor · yuzni avtomatik solishtirish va oddiy harakat tekshiruvi';
-      $('start-button').hidden=true;$('capture-button').hidden=false;$('capture-button').disabled=false;$('retry-button').hidden=true;busy=false;setNotice('Topshiriqni bajaring, so‘ng kadrlarni oling.');
+      $('start-button').hidden=true;$('capture-button').hidden=true;$('capture-button').disabled=true;$('retry-button').hidden=true;
+      $('capture-count').textContent='0 / 5';$('capture-status').textContent='3 soniyadan so‘ng kadrlar avtomatik olinadi';$('progress').style.width='0';
+      busy=false;setNotice('Yuzingizni kadrga joylang va ko‘rsatilgan tomonga sekin buring. 3 soniyadan so‘ng 5 kadr avtomatik olinib serverga yuboriladi.');
+      autoCaptureTimer=setTimeout(()=>{autoCaptureTimer=null;capture();},3000);
     }catch(error){
       if(stopped){busy=false;return;}
       if(cameraPromise)cameraPromise.then(pending=>{if(pending!==stream&&pending.getTracks().some(track=>track.readyState==='live'))pending.getTracks().forEach(track=>track.stop());}).catch(()=>{});
@@ -219,11 +227,17 @@
     }
   }
   async function capture(){
-    if(busy||!hasLiveCamera()||!challenge||!coords)return;
+    if(busy||stopped||!hasLiveCamera()||!challenge||!coords)return;
     busy=true;stopped=false;$('capture-button').disabled=true;$('stop-button').hidden=false;const video=$('video');
     try{
+      video.muted=true;video.playsInline=true;if(video.srcObject!==stream)video.srcObject=stream;
+      try{await video.play();}catch(_){const error=Error('Kamera tasviri qayta ishga tushmadi. Tekshiruvni qayta boshlang.');error.name='CameraPlaybackError';error.cameraFailure=true;throw error;}
       await new Promise((resolve,reject)=>{if(video.readyState>=2)return resolve();video.onloadeddata=resolve;setTimeout(()=>reject(Error('Kamera tasviri tayyor bo‘lmadi.')),5000);});
-      const canvas=document.createElement('canvas');canvas.width=640;canvas.height=480;const ctx=canvas.getContext('2d');if(!ctx)throw Error('Kadr olish ishga tushmadi.');
+      const canvas=document.createElement('canvas');
+      const sourceWidth=Number(video.videoWidth)||640,sourceHeight=Number(video.videoHeight)||480;
+      const scale=Math.min(1,720/Math.max(sourceWidth,sourceHeight));
+      canvas.width=Math.max(1,Math.round(sourceWidth*scale));canvas.height=Math.max(1,Math.round(sourceHeight*scale));
+      const ctx=canvas.getContext('2d');if(!ctx)throw Error('Kadr olish ishga tushmadi.');
       const frames=[];
       for(let i=0;i<5;i++){
         if(stopped)throw Error('Tekshiruv to‘xtatildi.');
@@ -236,11 +250,16 @@
       const form=new FormData();form.append('challenge_id',challenge.challenge_id);form.append('action',action());form.append('latitude',String(coords.latitude));form.append('longitude',String(coords.longitude));form.append('accuracy_m',String(coords.accuracy_m));frames.forEach((blob,i)=>form.append('frames',blob,`frame-${i+1}.jpg`));
       const res=await fetch(`${api}/api/attendance`,{method:'POST',headers:headers(),body:form});let data={};try{data=await res.json();}catch(_){ }
       if(!res.ok){const code=data.error||data.detail||data.message;const error=Error(apiError(code,res.status,data));if(code==='outside_office_radius'||code==='location_accuracy_insufficient'){error.locationFailure=true;error.locationSource=coords.source;}throw error;}
-      stopCamera();busy=false;markDone('step-motion');$('capture-status').textContent='Tekshiruv yakunlandi';$('progress').style.width='100%';$('capture-button').hidden=true;$('stop-button').hidden=true;$('retry-button').hidden=true;setNotice(data.message||`${labels[action()].charAt(0).toUpperCase()+labels[action()].slice(1)} muvaffaqiyatli qayd etildi.`,'success');
+      busy=false;markDone('step-motion');$('capture-status').textContent='Server tasdiqladi';$('progress').style.width='100%';$('capture-button').hidden=true;$('stop-button').hidden=true;$('retry-button').hidden=true;
+      $('video-wrap').classList.add('confirmed');$('camera-status').textContent='Yuz tasdiqlandi';$('motion-status').textContent='Davomat qayd etildi';
+      setNotice(data.message||`${labels[action()].charAt(0).toUpperCase()+labels[action()].slice(1)} muvaffaqiyatli qayd etildi.`,'success');
+      successTimer=setTimeout(()=>{successTimer=null;stopCamera();},1800);
     }catch(error){
       if(stopped){$('capture-count').textContent='0 / 5';$('capture-status').textContent='5 ta kadr olinadi';$('progress').style.width='0';}
       busy=false;$('capture-button').hidden=true;$('retry-button').hidden=false;$('stop-button').hidden=!hasLiveCamera();$('start-button').hidden=true;
-      let message=error.message||'Kadrlarni olishda xatolik.';if(error.locationFailure&&error.locationSource)message=appendLocationSource(message,error.locationSource);setNotice(message,'error');
+      let message=error.cameraFailure?cameraErrorMessage(error):(error.message||'Kadrlarni olishda xatolik.');
+      if(error.cameraFailure||!hasLiveCamera())stopCamera();
+      if(error.locationFailure&&error.locationSource)message=appendLocationSource(message,error.locationSource);setNotice(message,'error');
     }
   }
   $('action-select').addEventListener('change',()=>{$('start-button').textContent='Tekshiruvni boshlash →';challenge=null;coords=null;stopCamera();$('start-button').hidden=false;$('start-button').disabled=false;$('capture-button').hidden=true;$('retry-button').hidden=true;setNotice(`${labels[action()]} uchun GPS aniqligi, yuz mosligi va bir martalik harakat tekshiruvi bajariladi.`);});

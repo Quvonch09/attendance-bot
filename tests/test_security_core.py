@@ -173,6 +173,52 @@ class SecurityCoreTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_motion_check_and_face_match_failures_are_distinct_and_fail_closed(self):
+        async def run_case(liveness_ok, face_ok):
+            token, now = "67890:face-failure-token", int(time.time())
+            raw = telegram_init_data(token, now)
+            compare_calls, recorded = [], []
+            def compare(reference, candidate):
+                compare_calls.append(candidate)
+                return face_ok
+            app = build_api_app(
+                token=token, allowed_origin="https://web.example",
+                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
+                get_event=lambda uid, kind: None, get_explanation=lambda uid: True,
+                add_event=lambda *args: recorded.append(args), compare_face=compare,
+                notify_admins=lambda text: None, format_name=lambda user: "Test",
+                late_minutes=lambda value: 0, hhmm=lambda value: "08:00",
+                now_local=lambda: datetime(2026, 1, 1, 8, 0),
+                distance_from_office=lambda lat, lon: 100, clock=lambda: now,
+                liveness_check=lambda paths: liveness_ok,
+            )
+            async with TestClient(TestServer(app)) as client:
+                headers = {"Origin": "https://web.example", "X-Telegram-Init-Data": raw}
+                challenge = await client.get("/api/challenge?action=checkin", headers=headers)
+                challenge_id = (await challenge.json())["challenge_id"]
+                form = FormData()
+                for name, value in (("challenge_id", challenge_id), ("action", "checkin"),
+                                    ("latitude", "1.0"), ("longitude", "2.0"),
+                                    ("accuracy_m", "20")):
+                    form.add_field(name, value)
+                for index in range(5):
+                    form.add_field("frames", b"test-frame", filename=f"frame-{index}.jpg",
+                                   content_type="image/jpeg")
+                response = await client.post("/api/attendance", data=form, headers=headers)
+                return response.status, (await response.json())["error"], len(compare_calls), recorded
+
+        async def scenario():
+            motion_failure = await run_case(False, True)
+            self.assertEqual(motion_failure[:3], (422, "motion_check_failed", 0))
+            self.assertEqual(motion_failure[3], [])
+
+            face_failure = await run_case(True, False)
+            self.assertEqual(face_failure[:3], (422, "face_match_failed", 3))
+            self.assertEqual(face_failure[3], [])
+
+        asyncio.run(scenario())
+
     def test_location_accuracy_classification_is_conservative(self):
         self.assertIsNone(classify_location(250, 50, 300))
         self.assertEqual(classify_location(280, 50, 300), "location_accuracy_insufficient")

@@ -353,7 +353,7 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
                     live_result = await asyncio.to_thread(liveness_check, paths)
                 live_ok = bool(live_result)
                 if not live_ok:
-                    return web.json_response({"error": "face_check_failed"}, status=422)
+                    return web.json_response({"error": "motion_check_failed"}, status=422)
                 reference = user["face_path"] if hasattr(user, "__getitem__") else getattr(user, "face_path")
                 face_ok = False
                 for index in sorted(set((0, len(paths) // 2, len(paths) - 1))):
@@ -361,7 +361,7 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
                         face_ok = True
                         break
                 if not face_ok:
-                    return web.json_response({"error": "face_check_failed"}, status=422)
+                    return web.json_response({"error": "face_match_failed"}, status=422)
                 try:
                     await invoke(add_event, uid, action, lat, lon, distance, 1, 1)
                 except sqlite3.IntegrityError:
