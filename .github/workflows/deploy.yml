@@ -37,6 +37,9 @@ jobs:
       - name: Check Web App JavaScript syntax
         run: node --check webapp/app.js
 
+      - name: Check Telegram WebView iOS and Android regressions
+        run: node --test tests/test_webapp_runtime.test.js
+
   deploy:
     needs: test
     runs-on: ubuntu-24.04

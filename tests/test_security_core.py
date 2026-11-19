@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aiogram.utils.web_app import check_webapp_signature
 
 import bot
-from webapp_api import build_api_app, verify_init_data
+from webapp_api import build_api_app, classify_location, verify_init_data
 
 
 def telegram_init_data(token: str, now: int) -> str:
@@ -163,12 +163,111 @@ class SecurityCoreTests(unittest.TestCase):
                     form.add_field("action", action)
                     form.add_field("latitude", "1.0")
                     form.add_field("longitude", "2.0")
+                    form.add_field("accuracy_m", "10")
                     return await client.post("/api/attendance", data=form, headers=headers)
 
                 mismatch = await submit("lunch_out")
                 self.assertEqual(mismatch.status, 400)
                 replay = await submit("checkin")
                 self.assertEqual(replay.status, 400)
+
+        asyncio.run(scenario())
+
+    def test_location_accuracy_classification_is_conservative(self):
+        self.assertIsNone(classify_location(250, 50, 300))
+        self.assertEqual(classify_location(280, 50, 300), "location_accuracy_insufficient")
+        self.assertEqual(classify_location(351, 50, 300), "outside_office_radius")
+        self.assertEqual(classify_location(100, 0, 300), "location_accuracy_insufficient")
+        self.assertEqual(classify_location(100, 100_001, 300), "location_accuracy_insufficient")
+
+    def test_location_preflight_distinguishes_uncertain_from_clearly_outside(self):
+        async def scenario():
+            token, now = "45678:location-accuracy-token", int(time.time())
+            raw = telegram_init_data(token, now)
+            distances = {1.0: 250.0, 2.0: 280.0, 3.0: 360.0, 4.0: 200.0}
+            app = build_api_app(
+                token=token, allowed_origin="https://web.example",
+                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
+                get_event=lambda uid, kind: None, get_explanation=lambda uid: True,
+                add_event=lambda *args: None, compare_face=lambda *args: True,
+                notify_admins=lambda text: None, format_name=lambda user: "Test",
+                late_minutes=lambda value: 0, hhmm=lambda value: "08:00",
+                now_local=lambda: datetime(2026, 1, 1, 8, 0),
+                distance_from_office=lambda lat, lon: distances[lat], clock=lambda: now,
+                liveness_check=lambda paths: True,
+            )
+            async with TestClient(TestServer(app)) as client:
+                headers = {"Origin": "https://web.example", "X-Telegram-Init-Data": raw}
+                inside = await client.post("/api/location-check", headers=headers,
+                                           json={"latitude": 1.0, "longitude": 2.0, "accuracy_m": 50})
+                self.assertEqual(inside.status, 200)
+                self.assertEqual(await inside.json(), {"ok": True, "distance_m": 250, "accuracy_m": 50})
+
+                uncertain = await client.post("/api/location-check", headers=headers,
+                                              json={"latitude": 2.0, "longitude": 2.0, "accuracy_m": 50})
+                self.assertEqual(uncertain.status, 422)
+                self.assertEqual((await uncertain.json())["error"], "location_accuracy_insufficient")
+
+                outside = await client.post("/api/location-check", headers=headers,
+                                            json={"latitude": 3.0, "longitude": 2.0,
+                                                  "accuracy_m": 50, "distance_m": 0})
+                self.assertEqual(outside.status, 403)
+                self.assertEqual((await outside.json())["error"], "outside_office_radius")
+
+                missing_accuracy = await client.post("/api/location-check", headers=headers,
+                                                     json={"latitude": 4.0, "longitude": 2.0})
+                self.assertEqual(missing_accuracy.status, 422)
+                self.assertEqual((await missing_accuracy.json())["error"], "location_accuracy_insufficient")
+
+        asyncio.run(scenario())
+
+    def test_attendance_rechecks_accuracy_and_records_only_server_distance(self):
+        async def scenario():
+            token, now = "56789:final-location-accuracy-token", int(time.time())
+            raw = telegram_init_data(token, now)
+            current_distance = [320.0]
+            recorded = []
+            def get_event(uid, kind):
+                return {"happened_at": "2026-01-01T08:05:00"} if recorded else None
+            app = build_api_app(
+                token=token, allowed_origin="https://web.example",
+                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
+                get_event=get_event, get_explanation=lambda uid: True,
+                add_event=lambda *args: recorded.append(args), compare_face=lambda *args: True,
+                notify_admins=lambda text: None, format_name=lambda user: "Test",
+                late_minutes=lambda value: 0, hhmm=lambda value: "08:05",
+                now_local=lambda: datetime(2026, 1, 1, 8, 0),
+                distance_from_office=lambda lat, lon: current_distance[0], clock=lambda: now,
+                liveness_check=lambda paths: True,
+            )
+            async with TestClient(TestServer(app)) as client:
+                headers = {"Origin": "https://web.example", "X-Telegram-Init-Data": raw}
+
+                async def submit(accuracy):
+                    challenge_response = await client.get("/api/challenge?action=checkin", headers=headers)
+                    cid = (await challenge_response.json())["challenge_id"]
+                    form = FormData()
+                    for name, value in (("challenge_id", cid), ("action", "checkin"),
+                                        ("latitude", "1.0"), ("longitude", "2.0"),
+                                        ("accuracy_m", str(accuracy))):
+                        form.add_field(name, value)
+                    for index in range(3):
+                        form.add_field("frames", b"test-frame", filename=f"frame-{index}.jpg", content_type="image/jpeg")
+                    return await client.post("/api/attendance", data=form, headers=headers)
+
+                uncertain = await submit(40)
+                self.assertEqual(uncertain.status, 422)
+                self.assertEqual((await uncertain.json())["error"], "location_accuracy_insufficient")
+                self.assertEqual(recorded, [])
+
+                current_distance[0] = 230.0
+                accepted = await submit(50)
+                self.assertEqual(accepted.status, 200)
+                result = await accepted.json()
+                self.assertEqual(result["distance_m"], 230)
+                self.assertEqual(recorded[0][4], 230.0)
 
         asyncio.run(scenario())
 

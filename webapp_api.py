@@ -27,6 +27,7 @@ MAX_TOTAL_BYTES = 6_000_000
 MIN_FRAMES = 3
 MAX_FRAMES = 6
 CHALLENGE_TTL = 300
+MAX_LOCATION_ACCURACY_M = 100_000
 ALLOWED_ACTIONS = ("checkin", "lunch_out", "lunch_in", "checkout")
 MAX_CHALLENGES = 4096
 
@@ -68,6 +69,25 @@ def verify_init_data(init_data: str, bot_token: str, *, now_epoch: float | None 
         return fields  # type: ignore[return-value]
     except (ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
+
+
+def classify_location(distance_m: float, accuracy_m: float, radius_m: float) -> str | None:
+    """Conservatively classify a server-computed distance and device accuracy."""
+    try:
+        distance_m = float(distance_m)
+        accuracy_m = float(accuracy_m)
+        radius_m = float(radius_m)
+    except (TypeError, ValueError, OverflowError):
+        return "location_accuracy_insufficient"
+    if not math.isfinite(distance_m) or distance_m < 0 or not math.isfinite(radius_m) or radius_m <= 0:
+        return "location_unavailable"
+    if not math.isfinite(accuracy_m) or accuracy_m <= 0 or accuracy_m > MAX_LOCATION_ACCURACY_M:
+        return "location_accuracy_insufficient"
+    if distance_m - accuracy_m > radius_m:
+        return "outside_office_radius"
+    if distance_m + accuracy_m > radius_m:
+        return "location_accuracy_insufficient"
+    return None
 
 
 def detect_face_liveness(frame_paths: list[str | Path]) -> bool:
@@ -169,6 +189,50 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         data = verify_init_data(request.headers.get("X-Telegram-Init-Data", ""), token, now_epoch=clock())
         return int(data["user"]["id"]) if data else None
 
+    async def measure_location(lat: float, lon: float, accuracy_m: float):
+        try:
+            distance = float(await invoke(distance_from_office, lat, lon))
+        except Exception:
+            return None, "location_unavailable"
+        return distance, classify_location(distance, accuracy_m, office_radius_m)
+
+    def location_response(distance: float | None, accuracy_m: float, error: str | None = None):
+        if error:
+            status = 403 if error == "outside_office_radius" else 422 if error == "location_accuracy_insufficient" else 400
+            payload: dict[str, Any] = {"error": error}
+        else:
+            status = 200
+            payload = {"ok": True}
+        if distance is not None and math.isfinite(distance):
+            payload["distance_m"] = round(distance)
+        if math.isfinite(accuracy_m) and 0 < accuracy_m <= MAX_LOCATION_ACCURACY_M:
+            payload["accuracy_m"] = round(accuracy_m)
+        return web.json_response(payload, status=status)
+
+    async def location_check(request: web.Request):
+        uid = authenticated_uid(request)
+        if uid is None:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        if not await invoke(get_user, uid):
+            return web.json_response({"error": "not_approved"}, status=403)
+        if request.content_type != "application/json":
+            return web.json_response({"error": "invalid_location"}, status=400)
+        try:
+            values = await request.json()
+            if not isinstance(values, dict):
+                raise ValueError
+            lat, lon = float(values["latitude"]), float(values["longitude"])
+            if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
+                raise ValueError
+        except (KeyError, ValueError, TypeError, OverflowError, json.JSONDecodeError):
+            return web.json_response({"error": "invalid_location"}, status=400)
+        try:
+            accuracy_m = float(values["accuracy_m"])
+        except (KeyError, ValueError, TypeError, OverflowError):
+            accuracy_m = math.nan
+        distance, error = await measure_location(lat, lon, accuracy_m)
+        return location_response(distance, accuracy_m, error)
+
     async def challenge(request: web.Request):
         uid = authenticated_uid(request)
         if uid is None:
@@ -210,7 +274,7 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         files: list[tuple[str, bytes]] = []
         total = 0
         async for part in reader:
-            if part.name in ("latitude", "longitude", "challenge_id", "action"):
+            if part.name in ("latitude", "longitude", "accuracy_m", "challenge_id", "action"):
                 if part.filename:
                     return web.json_response({"error": "invalid_form"}, status=400)
                 value = await part.text()
@@ -245,20 +309,21 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
                 raise ValueError
             if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
                 raise ValueError
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, OverflowError):
             return web.json_response({"error": "invalid_location_or_challenge"}, status=400)
+        try:
+            accuracy_m = float(values["accuracy_m"])
+        except (KeyError, ValueError, OverflowError):
+            return web.json_response({"error": "location_accuracy_insufficient"}, status=422)
         prune()
         entry = challenges.pop(cid, None)  # one-use even when later validation fails
         if not entry or entry["uid"] != uid or entry["action"] != action or entry["expires"] <= clock():
             return web.json_response({"error": "challenge_expired"}, status=400)
         if not MIN_FRAMES <= len(files) <= MAX_FRAMES:
             return web.json_response({"error": "invalid_frame_count"}, status=400)
-        try:
-            distance = float(await invoke(distance_from_office, lat, lon))
-        except Exception:
-            return web.json_response({"error": "location_unavailable"}, status=400)
-        if not math.isfinite(distance) or distance > office_radius_m:
-            return web.json_response({"error": "outside_office_radius"}, status=403)
+        distance, location_error_code = await measure_location(lat, lon, accuracy_m)
+        if location_error_code:
+            return location_response(distance, accuracy_m, location_error_code)
 
         created: list[Path] = []
         try:
@@ -331,6 +396,7 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
 
     app.router.add_route("GET", "/", index_page)
     app.router.add_route("GET", "/{asset}", static_asset)
+    app.router.add_route("POST", "/api/location-check", location_check)
     app.router.add_route("GET", "/api/challenge", challenge)
     app.router.add_route("POST", "/api/attendance", attendance)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)

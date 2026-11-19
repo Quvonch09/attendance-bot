@@ -19,27 +19,49 @@
   const setNotice = (text, kind = '') => { const n=$('notice'); n.textContent=text; n.className=`notice ${kind}`.trim(); };
   const markDone = (id) => $(id).classList.add('done');
   const headers = () => ({'X-Telegram-Init-Data': initData});
-  const apiError = (code, status) => ({
-    unauthorized:'Telegram tekshiruvi o‘tmadi. Web App-ni bot ichidan qayta oching.',
-    not_approved:'Ro‘yxatdagi yuzingiz hali admin yoki nazoratchi tomonidan tasdiqlanmagan.',
-    already_checked_in:'Bugungi kelishingiz avval qayd etilgan.', duplicate_action:'Bu amal bugun allaqachon qayd etilgan.', sequence_invalid:'Bu amal davomat ketma-ketligiga mos kelmaydi.', invalid_action:'Noto‘g‘ri davomat amali.',
-    late_reason_required:'09:30 dan keyin kelayotgan bo‘lsangiz, bot chatiga kechikish sababini matn yoki ovozda yuboring, keyin qayta urinib ko‘ring.',
-    outside_office_radius:'Siz ofisdan 300 metr radiusdan tashqaridasiz.',
-    face_check_failed:'Yuz yoki harakat tekshiruvi o‘tmadi. Kameraga aniq qarab, topshiriqni bajaring va qayta urinib ko‘ring.',
-    challenge_expired:'Harakat topshirig‘i muddati tugadi. Tekshiruvni qayta boshlang.',
-    service_unavailable:'Davomat API hali sozlanmagan. Birozdan so‘ng qayta urinib ko‘ring.',
-    origin_denied:'Web App manzili API tomonidan ruxsat etilmagan.',
-    location_unavailable:'Joylashuvni tekshirib bo‘lmadi. GPS-ni yoqib qayta urinib ko‘ring.'
-  })[code] || `Tekshiruv serverda bajarilmadi (${status}). Qayta urinib ko‘ring.`;
-  function distanceMeters(a,b,c,d){const r=x=>x*Math.PI/180,dl=r(c-a),dn=r(d-b),q=Math.sin(dl/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(dn/2)**2;return 6371000*2*Math.atan2(Math.sqrt(q),Math.sqrt(1-q));}
+  function isIOS(){
+    const platform=String((tg&&tg.platform)||'').toLowerCase();
+    const ua=String(navigator.userAgent||'').toLowerCase();
+    return platform==='ios'||/iphone|ipad|ipod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  }
+  function locationPermissionHelp(){
+    return isIOS()
+      ? 'iPhone’da Sozlamalar → Maxfiylik va xavfsizlik → Joylashuv xizmatlari → Telegram ichida “Aniq joylashuv”ni yoqing.'
+      : 'Android’da Sozlamalar → Joylashuv → Google Location Accuracy-ni va Telegram uchun aniq joylashuv ruxsatini yoqing.';
+  }
+  function apiError(code, status, data = {}){
+    if(code==='location_accuracy_insufficient'){
+      const accuracy=Number(data.accuracy_m);
+      const accuracyText=Number.isFinite(accuracy)&&accuracy>0?` Qurilma bildirgan aniqlik: taxminan ±${Math.round(accuracy)} m.`:'';
+      return `GPS aniqligi 300 m chegarasiga nisbatan noaniq.${accuracyText} ${locationPermissionHelp()} Ochiq joyda 10–20 soniya kutib, “GPSni qayta tekshirish”ni bosing. Davomat qayd etilmadi; 300 m radius o‘zgarmagan.`;
+    }
+    if(code==='outside_office_radius'){
+      const distance=Number(data.distance_m);
+      const distanceText=Number.isFinite(distance)?` Server hisoblagan masofa taxminan ${Math.round(distance)} m.`:'';
+      return `GPS o‘lchovi ofisning 300 m hududidan tashqarini ko‘rsatdi.${distanceText} Agar ofisda bo‘lsangiz, ${locationPermissionHelp()} va ochiq joyda qayta tekshiring. Davomat qayd etilmadi; radius o‘zgarmagan.`;
+    }
+    return ({
+      unauthorized:'Telegram tekshiruvi o‘tmadi. Web App-ni bot ichidan qayta oching.',
+      not_approved:'Ro‘yxatdagi yuzingiz hali admin yoki nazoratchi tomonidan tasdiqlanmagan.',
+      already_checked_in:'Bugungi kelishingiz avval qayd etilgan.', duplicate_action:'Bu amal bugun allaqachon qayd etilgan.', sequence_invalid:'Bu amal davomat ketma-ketligiga mos kelmaydi.', invalid_action:'Noto‘g‘ri davomat amali.',
+      late_reason_required:'09:30 dan keyin kelayotgan bo‘lsangiz, bot chatiga kechikish sababini matn yoki ovozda yuboring, keyin qayta urinib ko‘ring.',
+      face_check_failed:'Yuz yoki harakat tekshiruvi o‘tmadi. Kameraga aniq qarab, topshiriqni bajaring va qayta urinib ko‘ring.',
+      challenge_expired:'Harakat topshirig‘i muddati tugadi. Tekshiruvni qayta boshlang.',
+      service_unavailable:'Davomat API hali sozlanmagan. Birozdan so‘ng qayta urinib ko‘ring.',
+      origin_denied:'Web App manzili API tomonidan ruxsat etilmagan.',
+      location_unavailable:'Joylashuvni tekshirib bo‘lmadi. GPS-ni yoqib, ochiq joyda qayta urinib ko‘ring.'
+    })[code] || `Tekshiruv serverda bajarilmadi (${status}). Qayta urinib ko‘ring.`;
+  }
   function cameraErrorMessage(error){
     const name=error&&error.name;
-    if(name==='CameraPermissionTimeoutError')return 'Telegram kamera ruxsati so‘roviga 30 soniyada javob bermadi. Ruxsat oynasi chiqsa, “Ruxsat berish”ni bosing; chiqmasa Telegram-ni to‘liq yopib qayta oching.';
-    if(name==='NotAllowedError'||name==='PermissionDeniedError')return 'Kameraga ruxsat berilmadi. Android sozlamalarida: Sozlamalar → Ilovalar → Telegram → Ruxsatlar → Kamera → Ruxsat berish. So‘ng Mini App-ni qayta oching.';
+    if(name==='CameraPermissionTimeoutError')return 'Kamera ruxsati so‘roviga 30 soniyada javob kelmadi. Ruxsat oynasi chiqsa, ruxsat bering; chiqmasa Telegram-ni to‘liq yopib qayta oching.';
+    if(name==='NotAllowedError'||name==='PermissionDeniedError')return isIOS()
+      ? 'Kameraga ruxsat berilmadi. iPhone’da Sozlamalar → Maxfiylik va xavfsizlik → Kamera → Telegram ruxsatini yoqing, so‘ng Mini App-ni qayta oching.'
+      : 'Kameraga ruxsat berilmadi. Android’da Sozlamalar → Ilovalar → Telegram → Ruxsatlar → Kamera-ni yoqing, so‘ng Mini App-ni qayta oching.';
     if(name==='NotFoundError'||name==='DevicesNotFoundError')return 'Old kamera topilmadi. Qurilmada kamera borligini tekshiring.';
     if(name==='NotReadableError'||name==='TrackStartError')return 'Kamera boshqa ilovada band yoki ochilmadi. Kamera ishlatayotgan ilovalarni yoping va qayta urinib ko‘ring.';
-    if(name==='CameraPlaybackError'||name==='CameraFrameTimeoutError')return error.message||'Kamera ulandi, lekin tasvir chiqmadi. Telegram-ni to‘liq yopib qayta oching.';
-    return error.message||'Kamera ochilmadi. Telegram/Android kameraga ruxsatini tekshirib, qayta urinib ko‘ring.';
+    if(name==='CameraPlaybackError'||name==='CameraFrameTimeoutError'||name==='CameraStreamEndedError')return error.message||'Kamera tasviri to‘xtadi. Tekshiruvni qayta boshlang.';
+    return error.message||'Kamera ochilmadi. Qurilma sozlamalarida Telegram uchun kameraga ruxsatni tekshiring.';
   }
   function locationError(message,name='LocationPermissionError'){
     const error=Error(message);error.name=name;error.locationFailure=true;return error;
@@ -55,79 +77,140 @@
     promise.then(cameraStream=>{if(timedOut)cameraStream.getTracks().forEach(track=>track.stop());},()=>{});
     return Promise.race([promise,timeout]).finally(()=>clearTimeout(timer));
   }
+  function normalizePosition(position){
+    const raw=position&&position.coords;
+    if(!raw)return Promise.reject(locationError('Qurilmadan koordinata olinmadi. GPS-ni yoqib qayta urinib ko‘ring.'));
+    const latitude=Number(raw.latitude),longitude=Number(raw.longitude),accuracy=Number(raw.accuracy);
+    if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude < -90||latitude > 90||longitude < -180||longitude > 180)
+      return Promise.reject(locationError('Qurilmadan to‘g‘ri koordinata olinmadi. Qayta urinib ko‘ring.'));
+    if(!Number.isFinite(accuracy)||accuracy<=0)
+      return Promise.reject(locationError(`Qurilma GPS aniqligini bermadi. ${locationPermissionHelp()} Ochiq joyda qayta urinib ko‘ring.`,'LocationAccuracyUnavailableError'));
+    return {coords:{latitude,longitude,accuracy}};
+  }
+  function requestBrowserLocation(){
+    if(!navigator.geolocation)return Promise.reject(locationError('Bu Telegram WebView’da joylashuv API mavjud emas. Telegram-ni yangilang yoki joylashuv ruxsatini tekshiring.'));
+    const operation=new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(position=>{
+      try{resolve(normalizePosition(position));}catch(error){reject(error);}
+    },error=>{
+      reject(locationError(error.code===1?`Joylashuvga ruxsat berilmadi. ${locationPermissionHelp()}`:error.code===2?'GPS joylashuv aniqlanmadi. Ochiq joyda qayta urinib ko‘ring.':'GPS so‘rovi vaqti tugadi. Ochiq joyda qayta urinib ko‘ring.'));
+    },{enableHighAccuracy:true,timeout:20000,maximumAge:0}));
+    return waitWithTimeout(operation,25000,'LocationPermissionTimeoutError','Qurilma joylashuv so‘roviga 25 soniyada javob bermadi. GPS va aniq joylashuv ruxsatini tekshirib qayta urinib ko‘ring.','locationFailure');
+  }
   function requestLocation(){
     const manager=tg&&tg.LocationManager;
-    if(manager&&typeof manager.init==='function'&&typeof manager.getLocation==='function'){
-      const operation=new Promise((resolve,reject)=>{
-        const fail=(message)=>reject(locationError(message));
-        const readLocation=()=>{
-          if(manager.isLocationAvailable===false){fail('Telefonning joylashuv xizmati mavjud emas yoki o‘chiq. GPS/joylashuvni yoqing va qayta urinib ko‘ring.');return;}
-          try{
-            manager.getLocation(location=>{
-              if(!location){fail('Telegram orqali joylashuvga ruxsat berilmadi. Mini App so‘roviga ruxsat bering va qayta urinib ko‘ring.');return;}
-              const latitude=Number(location.latitude),longitude=Number(location.longitude);
-              if(!Number.isFinite(latitude)||!Number.isFinite(longitude)){fail('Telegram joylashuv xizmatidan koordinata olinmadi. Qayta urinib ko‘ring.');return;}
-              resolve({coords:{latitude,longitude}});
-            });
-          }catch(error){fail(error.message||'Telegram joylashuv so‘rovini boshlay olmadi.');}
-        };
-        try{if(manager.isInited)readLocation();else manager.init(readLocation);}
-        catch(error){fail(error.message||'Telegram joylashuv xizmatini ishga tushira olmadi.');}
-      });
-      return waitWithTimeout(operation,20000,'LocationPermissionTimeoutError','Telegram joylashuv so‘roviga 20 soniyada javob bermadi. Mini App-ni qayta ochib, joylashuvga ruxsat bering.','locationFailure');
-    }
-    if(!navigator.geolocation)return Promise.reject(locationError('Bu Telegram WebView’da joylashuv aniqlash API mavjud emas. Telegram-ni yangilab, qayta oching.'));
-    const operation=new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,error=>{
-      reject(locationError(error.code===1?'Joylashuvga ruxsat berilmadi. Telegram/Android sozlamalarida joylashuv ruxsatini bering.':error.code===2?'Joylashuv aniqlanmadi. GPS/joylashuvni yoqing.':'Joylashuv so‘rovi vaqti tugadi. Qayta urinib ko‘ring.'));
-    },{enableHighAccuracy:true,timeout:15000,maximumAge:0}));
-    return waitWithTimeout(operation,20000,'LocationPermissionTimeoutError','Qurilma joylashuv so‘roviga 20 soniyada javob bermadi. GPS va Telegram ruxsatini tekshirib qayta urinib ko‘ring.','locationFailure');
+    if(!manager||typeof manager.init!=='function'||typeof manager.getLocation!=='function')return requestBrowserLocation();
+    const operation=new Promise((resolve,reject)=>{
+      const fail=(message,name='LocationPermissionError')=>reject(locationError(message,name));
+      const readLocation=()=>{
+        if(manager.isLocationAvailable===false){fail('Telefonning joylashuv xizmati o‘chiq. GPS/joylashuvni yoqing va qayta urinib ko‘ring.');return;}
+        try{
+          manager.getLocation(location=>{
+            if(!location){fail(`Telegram orqali joylashuvga ruxsat berilmadi. ${locationPermissionHelp()}`);return;}
+            const latitude=Number(location.latitude),longitude=Number(location.longitude),accuracy=Number(location.horizontal_accuracy);
+            if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude < -90||latitude > 90||longitude < -180||longitude > 180){fail('Telegram joylashuv xizmatidan to‘g‘ri koordinata olinmadi. Qayta urinib ko‘ring.');return;}
+            if(Number.isFinite(accuracy)&&accuracy>0){resolve({coords:{latitude,longitude,accuracy}});return;}
+            if(navigator.geolocation){requestBrowserLocation().then(resolve,reject);return;}
+            fail(`Telegram bu safar joylashuv aniqligini bermadi. ${locationPermissionHelp()} Ochiq joyda qayta urinib ko‘ring.`,'LocationAccuracyUnavailableError');
+          });
+        }catch(error){fail(error.message||'Telegram joylashuv so‘rovini boshlay olmadi.');}
+      };
+      try{if(manager.isInited)readLocation();else manager.init(readLocation);}
+      catch(error){fail(error.message||'Telegram joylashuv xizmatini ishga tushira olmadi.');}
+    });
+    return waitWithTimeout(operation,25000,'LocationPermissionTimeoutError','Telegram joylashuv so‘roviga 25 soniyada javob bermadi. Mini App-ni qayta ochib, joylashuv ruxsatini tekshiring.','locationFailure');
   }
-  function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;} $('video').srcObject=null;$('video-wrap')?.classList.remove('ready');$('camera-placeholder').hidden=false;$('stop-button').hidden=true;}
-  function showRetry(message){busy=false; $('start-button').hidden=true;$('capture-button').hidden=true;$('retry-button').hidden=false;$('stop-button').hidden=true;setNotice(message,'error');}
+  function hasLiveCamera(){
+    if(!stream||typeof stream.getVideoTracks!=='function')return false;
+    return stream.getVideoTracks().some(track=>track.readyState==='live');
+  }
+  function stopCamera(){
+    const current=stream;stream=null;
+    if(current)current.getTracks().forEach(track=>track.stop());
+    const video=$('video');if(typeof video.pause==='function')video.pause();video.srcObject=null;
+    $('video-wrap')?.classList.remove('ready');$('camera-placeholder').hidden=false;$('stop-button').hidden=true;
+  }
+  function watchCameraStream(cameraStream){
+    cameraStream.getVideoTracks().forEach(track=>{
+      if(typeof track.addEventListener==='function')track.addEventListener('ended',()=>{
+        if(stream!==cameraStream)return;
+        stopCamera();$('camera-status').textContent='Kamera oqimi to‘xtadi. Qayta boshlang.';
+        if(!busy){$('start-button').hidden=false;$('start-button').disabled=false;$('start-button').textContent='Kamerani qayta boshlash →';setNotice('Qurilma kamera oqimini to‘xtatdi. Kamerani qayta boshlang.','error');}
+      },{once:true});
+    });
+  }
+  function waitForVideoFrame(video){
+    return new Promise((resolve,reject)=>{
+      if(video.readyState>=2&&video.videoWidth>0)return resolve();
+      let timer;const finish=(fn,value)=>{clearTimeout(timer);video.removeEventListener('loadeddata',onFrame);video.removeEventListener('canplay',onFrame);fn(value);};
+      const onFrame=()=>{if(video.readyState>=2&&video.videoWidth>0)finish(resolve);};
+      timer=setTimeout(()=>{const error=Error('Kamera ulandi, lekin video kadr kelmadi.');error.name='CameraFrameTimeoutError';error.cameraFailure=true;finish(reject,error);},8000);
+      video.addEventListener('loadeddata',onFrame);video.addEventListener('canplay',onFrame);onFrame();
+    });
+  }
+  async function checkLocationOnServer(position){
+    let response;
+    try{
+      response=await fetch(`${api}/api/location-check`,{method:'POST',headers:{...headers(),'Content-Type':'application/json'},body:JSON.stringify({latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy_m:position.coords.accuracy})});
+    }catch(_){throw locationError('GPS tekshiruv serveriga ulanib bo‘lmadi. Internetni tekshirib, qayta urinib ko‘ring.','LocationCheckNetworkError');}
+    let data={};try{data=await response.json();}catch(_){ }
+    if(!response.ok){const error=Error(apiError(data.error,response.status,data));error.name=data.error||'LocationCheckError';error.locationFailure=true;throw error;}
+    return data;
+  }
   async function start(){
     if(busy)return;
     if(!initData){setNotice('Telegram Mini App ichida oching. Brauzer preview rejimi autentifikatsiya qilmaydi va check-in yubora olmaydi.','error');return;}
     if(!api){setNotice('API ulanishi sozlanmagan: webapp/config.js faylida ATTENDANCE_API_BASE qiymatini kiriting.','error');return;}
-    const officeLat=Number(window.ATTENDANCE_OFFICE_LAT),officeLon=Number(window.ATTENDANCE_OFFICE_LON);
-    if(!Number.isFinite(officeLat)||!Number.isFinite(officeLon)||window.ATTENDANCE_OFFICE_LAT===null||window.ATTENDANCE_OFFICE_LON===null){setNotice('Ofis koordinatalari sozlanmagan. config.js ichida ATTENDANCE_OFFICE_LAT va ATTENDANCE_OFFICE_LON ni kiriting.','error');return;}
-    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){const error=Error('Bu Telegram WebView’da kamera API mavjud emas. Telegram-ni yangilab, Mini App-ni qayta oching.');error.cameraFailure=true;setNotice(cameraErrorMessage(error),'error');return;}
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){const error=Error('Bu Telegram WebView’da kamera API mavjud emas. Telegram-ni yangilang va Mini App-ni qayta oching.');error.cameraFailure=true;setNotice(cameraErrorMessage(error),'error');return;}
     const manager=tg&&tg.LocationManager;
-    const hasTelegramLocation=manager&&typeof manager.init==='function'&&typeof manager.getLocation==='function';
-    if(!hasTelegramLocation&&!navigator.geolocation){setNotice('Bu Telegram WebView’da joylashuv aniqlash API mavjud emas. Telegram-ni yangilab, qayta oching.','error');return;}
-    busy=true;stopped=false;$('start-button').disabled=true;setNotice('Avval kameraga ruxsat bering; kamera tayyor bo‘lgach joylashuv so‘raladi.');
+    if((!manager||typeof manager.getLocation!=='function')&&!navigator.geolocation){setNotice('Bu Telegram WebView’da joylashuv API mavjud emas. Telegram-ni yangilang va joylashuv ruxsatini tekshiring.','error');return;}
+    busy=true;stopped=false;challenge=null;coords=null;$('start-button').disabled=true;setNotice('Avval kameraga ruxsat bering; kamera tayyor bo‘lgach aniq joylashuv so‘raladi.');
     let cameraPromise=null;
     try{
-      $('camera-status').textContent='Kameraga ulanish so‘ralmoqda…';
-      cameraPromise=navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'user'},width:{ideal:640},height:{ideal:480}}}).catch(error=>{const wrapped=Error(error&&error.message||'Kamera ochilmadi.');wrapped.name=error&&error.name||'Error';wrapped.cameraFailure=true;throw wrapped;});
-      cameraPromise.catch(()=>{});
-      const cameraStream=await waitForCamera(cameraPromise);
-      if(stopped){cameraStream.getTracks().forEach(track=>track.stop());return;}
-      stream=cameraStream;const video=$('video');video.muted=true;video.playsInline=true;video.srcObject=stream;
-      try{await video.play();}catch(_){const error=Error('Kamera ruxsati olindi, lekin video tasviri ishga tushmadi. Telegram-ni to‘liq yopib qayta oching.');error.name='CameraPlaybackError';error.cameraFailure=true;throw error;}
-      await new Promise((resolve,reject)=>{if(video.readyState>=2&&video.videoWidth>0)return resolve();let timer;const finish=(fn,value)=>{clearTimeout(timer);video.removeEventListener('loadeddata',onFrame);video.removeEventListener('canplay',onFrame);fn(value);};const onFrame=()=>{if(video.readyState>=2&&video.videoWidth>0)finish(resolve);};timer=setTimeout(()=>{const error=Error('Kamera ulandi, lekin video kadr kelmadi.');error.name='CameraFrameTimeoutError';error.cameraFailure=true;finish(reject,error);},8000);video.addEventListener('loadeddata',onFrame);video.addEventListener('canplay',onFrame);onFrame();});
+      if(!hasLiveCamera()){
+        if(stream)stopCamera();
+        $('camera-status').textContent='Kameraga ulanish so‘ralmoqda…';
+        cameraPromise=navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'user'},width:{ideal:640},height:{ideal:480}}}).catch(error=>{const wrapped=Error(error&&error.message||'Kamera ochilmadi.');wrapped.name=error&&error.name||'Error';wrapped.cameraFailure=true;throw wrapped;});
+        cameraPromise.catch(()=>{});
+        const cameraStream=await waitForCamera(cameraPromise);
+        if(stopped){cameraStream.getTracks().forEach(track=>track.stop());return;}
+        stream=cameraStream;watchCameraStream(cameraStream);
+      }
+      const video=$('video');video.muted=true;video.playsInline=true;if(video.srcObject!==stream)video.srcObject=stream;
+      try{await video.play();}catch(_){const error=Error('Kamera ruxsati olindi, lekin video tasviri ishga tushmadi. Kamerani qayta boshlang.');error.name='CameraPlaybackError';error.cameraFailure=true;throw error;}
+      await waitForVideoFrame(video);
       if(stopped)return;
+      if(!hasLiveCamera()){const error=Error('Kamera oqimi qurilma tomonidan to‘xtatildi.');error.name='CameraStreamEndedError';error.cameraFailure=true;throw error;}
       $('camera-placeholder').hidden=true;$('video-wrap').classList.add('ready');$('camera-status').textContent='Old kamera tayyor';markDone('step-camera');$('stop-button').hidden=false;
-      $('location-status').textContent=hasTelegramLocation?'Telegram orqali joylashuv so‘ralmoqda…':'Qurilma GPS ruxsati so‘ralmoqda…';setNotice('Kamera tayyor. Endi joylashuvga ruxsat bering.');
-      const pos=await requestLocation();
+      $('location-status').textContent=manager&&typeof manager.getLocation==='function'?'Telegram orqali aniq joylashuv so‘ralmoqda…':'Qurilma GPS aniqligi so‘ralmoqda…';setNotice('Kamera tayyor. Endi joylashuv aniqligi va ofis hududi tekshiriladi.');
+      const position=await requestLocation();
       if(stopped)return;
-      coords={latitude:pos.coords.latitude,longitude:pos.coords.longitude};const dist=distanceMeters(coords.latitude,coords.longitude,officeLat,officeLon);
-      if(dist>300)throw Error(`Siz ofisdan taxminan ${Math.round(dist)} m uzoqdasiz. Check-in uchun 300 m ichida bo‘ling.`);
-      $('location-status').textContent=`Ofis hududidasiz · taxminan ${Math.round(dist)} m`;markDone('step-location');setNotice('Joylashuv tasdiqlandi. Davom etyapti.');
+      if(!hasLiveCamera()){const error=Error('Kamera oqimi joylashuv so‘rovi paytida to‘xtadi. Kamerani qayta boshlang.');error.name='CameraStreamEndedError';error.cameraFailure=true;throw error;}
+      coords={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy_m:position.coords.accuracy};
+      $('location-status').textContent=`GPS aniqligi ±${Math.round(coords.accuracy_m)} m · ofis hududi tekshirilmoqda…`;
+      const location=await checkLocationOnServer(position);
+      if(stopped)return;
+      if(!hasLiveCamera()){const error=Error('Kamera oqimi qurilma tomonidan to‘xtatildi. Kamerani qayta boshlang.');error.name='CameraStreamEndedError';error.cameraFailure=true;throw error;}
+      $('location-status').textContent=`Ofis hududidasiz · taxminan ${location.distance_m} m · GPS ±${location.accuracy_m} m`;markDone('step-location');setNotice('Joylashuv tasdiqlandi. Harakat topshirig‘i tayyorlanmoqda.');
       const res=await fetch(`${api}/api/challenge?action=${encodeURIComponent(action())}`,{method:'GET',headers:headers()});let challengeData={};try{challengeData=await res.json();}catch(_){ }
-      if(!res.ok)throw Error(apiError(challengeData.error,res.status));
+      if(!res.ok)throw Error(apiError(challengeData.error,res.status,challengeData));
       challenge=challengeData;if(!challenge.challenge_id||!challenge.instruction)throw Error('Server topshirig‘i javobida kerakli ma’lumotlar yo‘q.');
       $('instruction').textContent=challenge.instruction;$('motion-status').textContent='Topshiriq tayyor · yuzni avtomatik solishtirish va oddiy harakat tekshiruvi';
       $('start-button').hidden=true;$('capture-button').hidden=false;$('capture-button').disabled=false;$('retry-button').hidden=true;busy=false;setNotice('Topshiriqni bajaring, so‘ng kadrlarni oling.');
     }catch(error){
       if(stopped){busy=false;return;}
-      if(cameraPromise)cameraPromise.then(pending=>pending.getTracks().forEach(track=>track.stop())).catch(()=>{});
-      const message=error.cameraFailure?cameraErrorMessage(error):(error.message||'Tekshiruvni boshlashda xatolik.');stopCamera();
-      if(error.cameraFailure)$('camera-status').textContent=message;
-      if(error.locationFailure)$('location-status').textContent=message;
+      if(cameraPromise)cameraPromise.then(pending=>{if(pending!==stream&&pending.getTracks().some(track=>track.readyState==='live'))pending.getTracks().forEach(track=>track.stop());}).catch(()=>{});
+      const message=error.cameraFailure?cameraErrorMessage(error):(error.message||'Tekshiruvni boshlashda xatolik.');
+      if(error.cameraFailure||!hasLiveCamera())stopCamera();
+      else{$('camera-placeholder').hidden=true;$('video-wrap').classList.add('ready');$('camera-status').textContent='Old kamera tayyor';$('stop-button').hidden=false;}
+      if(error.cameraFailure){$('camera-status').textContent=message;$('start-button').textContent='Kamerani qayta boshlash →';}
+      else if(error.locationFailure){$('location-status').textContent=message;$('start-button').textContent='GPSni qayta tekshirish →';}
+      else $('start-button').textContent='Qayta urinib ko‘rish →';
       busy=false;$('start-button').disabled=false;setNotice(message,'error');
     }
   }
-  async function capture(){if(busy||!stream||!challenge||!coords)return;busy=true;stopped=false;$('capture-button').disabled=true;$('stop-button').hidden=false;const video=$('video');
+  async function capture(){
+    if(busy||!hasLiveCamera()||!challenge||!coords)return;
+    busy=true;stopped=false;$('capture-button').disabled=true;$('stop-button').hidden=false;const video=$('video');
     try{
       await new Promise((resolve,reject)=>{if(video.readyState>=2)return resolve();video.onloadeddata=resolve;setTimeout(()=>reject(Error('Kamera tasviri tayyor bo‘lmadi.')),5000);});
       const canvas=document.createElement('canvas');canvas.width=640;canvas.height=480;const ctx=canvas.getContext('2d');if(!ctx)throw Error('Kadr olish ishga tushmadi.');
@@ -140,16 +223,20 @@
         if(i<4)await new Promise(resolve=>setTimeout(resolve,600));
       }
       if(stopped)throw Error('Tekshiruv to‘xtatildi.');$('capture-status').textContent='Serverga yuborilmoqda…';setNotice('Kadrlar serverga yuborilmoqda…');
-      const form=new FormData();form.append('challenge_id',challenge.challenge_id);form.append('action',action());form.append('latitude',String(coords.latitude));form.append('longitude',String(coords.longitude));frames.forEach((blob,i)=>form.append('frames',blob,`frame-${i+1}.jpg`));
+      const form=new FormData();form.append('challenge_id',challenge.challenge_id);form.append('action',action());form.append('latitude',String(coords.latitude));form.append('longitude',String(coords.longitude));form.append('accuracy_m',String(coords.accuracy_m));frames.forEach((blob,i)=>form.append('frames',blob,`frame-${i+1}.jpg`));
       const res=await fetch(`${api}/api/attendance`,{method:'POST',headers:headers(),body:form});let data={};try{data=await res.json();}catch(_){ }
-      if(!res.ok)throw Error(apiError(data.error||data.detail||data.message,res.status));
+      if(!res.ok)throw Error(apiError(data.error||data.detail||data.message,res.status,data));
       stopCamera();busy=false;markDone('step-motion');$('capture-status').textContent='Tekshiruv yakunlandi';$('progress').style.width='100%';$('capture-button').hidden=true;$('stop-button').hidden=true;$('retry-button').hidden=true;setNotice(data.message||`${labels[action()].charAt(0).toUpperCase()+labels[action()].slice(1)} muvaffaqiyatli qayd etildi.`,'success');
-    }catch(error){if(stopped){$('capture-count').textContent='0 / 5';$('capture-status').textContent='5 ta kadr olinadi';$('progress').style.width='0';}busy=false;$('capture-button').hidden=true;$('retry-button').hidden=false;$('stop-button').hidden=true;setNotice(error.message||'Kadrlarni olishda xatolik.','error');}
+    }catch(error){
+      if(stopped){$('capture-count').textContent='0 / 5';$('capture-status').textContent='5 ta kadr olinadi';$('progress').style.width='0';}
+      busy=false;$('capture-button').hidden=true;$('retry-button').hidden=false;$('stop-button').hidden=!hasLiveCamera();$('start-button').hidden=true;
+      setNotice(error.message||'Kadrlarni olishda xatolik.','error');
+    }
   }
-  $('action-select').addEventListener('change',()=>{challenge=null;coords=null;stopCamera();$('start-button').hidden=false;$('start-button').disabled=false;$('capture-button').hidden=true;$('retry-button').hidden=true;setNotice(`${labels[action()]} uchun GPS, yuz mosligi va bir martalik harakat tekshiruvi bajariladi.`);});
+  $('action-select').addEventListener('change',()=>{$('start-button').textContent='Tekshiruvni boshlash →';challenge=null;coords=null;stopCamera();$('start-button').hidden=false;$('start-button').disabled=false;$('capture-button').hidden=true;$('retry-button').hidden=true;setNotice(`${labels[action()]} uchun GPS aniqligi, yuz mosligi va bir martalik harakat tekshiruvi bajariladi.`);});
   $('start-button').addEventListener('click',start);$('capture-button').addEventListener('click',capture);
-  $('stop-button').addEventListener('click',()=>{stopped=true;stopCamera();busy=false;$('capture-button').hidden=true;$('start-button').hidden=false;$('start-button').disabled=false;$('retry-button').hidden=true;setNotice('Tekshiruv to‘xtatildi. Qayta boshlashingiz mumkin.');});
-  $('retry-button').addEventListener('click',()=>{challenge=null;coords=null;$('capture-count').textContent='0 / 5';$('capture-status').textContent='5 ta kadr olinadi';$('progress').style.width='0';$('retry-button').hidden=true;$('start-button').hidden=false;$('start-button').disabled=false;setNotice('Qayta urinishga tayyor.');});
+  $('stop-button').addEventListener('click',()=>{stopped=true;stopCamera();busy=false;$('capture-button').hidden=true;$('start-button').hidden=false;$('start-button').disabled=false;$('start-button').textContent='Tekshiruvni boshlash →';$('retry-button').hidden=true;setNotice('Tekshiruv to‘xtatildi. Qayta boshlashingiz mumkin.');});
+  $('retry-button').addEventListener('click',()=>{challenge=null;coords=null;$('capture-count').textContent='0 / 5';$('capture-status').textContent='5 ta kadr olinadi';$('progress').style.width='0';$('retry-button').hidden=true;$('start-button').hidden=false;$('start-button').disabled=false;$('start-button').textContent='Tekshiruvni boshlash →';setNotice('Qayta urinishga tayyor.');});
   if(!initData)setNotice('Telegram Mini App ichida oching. Brauzer preview rejimi autentifikatsiya qilmaydi va check-in yubora olmaydi.','error');
   else if(!api)setNotice('API ulanishi sozlanmagan: webapp/config.js faylida ATTENDANCE_API_BASE qiymatini kiriting.','error');
 })();

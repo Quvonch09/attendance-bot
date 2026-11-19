@@ -23,6 +23,19 @@ class WebAppPermissionFlowTests(unittest.TestCase):
         self.assertIn("LocationPermissionTimeoutError", APP_JS)
         self.assertIn("locationFailure", APP_JS)
 
+    def test_location_accuracy_from_telegram_and_browser_is_sent_to_server(self):
+        self.assertIn("location.horizontal_accuracy", APP_JS)
+        self.assertIn("raw.accuracy", APP_JS)
+        self.assertIn("/api/location-check", APP_JS)
+        self.assertIn("accuracy_m:position.coords.accuracy", APP_JS)
+        self.assertIn("form.append('accuracy_m'", APP_JS)
+        self.assertNotIn("dist>300", APP_JS)
+
+    def test_camera_is_preserved_for_location_errors_and_permission_help_covers_both_platforms(self):
+        self.assertIn("if(error.cameraFailure||!hasLiveCamera())stopCamera()", APP_JS)
+        self.assertIn("iPhone’da Sozlamalar", APP_JS)
+        self.assertIn("Android’da Sozlamalar", APP_JS)
+
 
 if __name__ == "__main__":
     unittest.main()
