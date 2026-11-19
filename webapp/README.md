@@ -4,7 +4,7 @@
 
 `config.js` Innova ofisining WGS84 koordinatalarini belgilaydi; API manzili `window.location.origin` orqali joriy origin’dan olinadi. Web App `https://api.orivasmarket.uz:8443/` sahifasidan ochilganda so‘rovlar o‘sha origin’dagi `/api/challenge` va `/api/attendance` manzillariga yuboriladi.
 
-Frontend kelish, tushlikka chiqish, tushlikdan qaytish va ishdan chiqish amallaridan birini tanlaydi. Har bir amal Telegram’dan kelgan xom `Telegram.WebApp.initData` bilan tasdiqlanadi, serverdagi bir martalik topshiriqni oladi, GPS koordinatasini va beshta JPEG kadrni `multipart/form-data` orqali yuboradi. Backend 300 metr radius, xodim tasdig‘i, takroriy qayd, amal ketma-ketligi, yuz mosligi va harakat belgilarini qayta tekshiradi. `initDataUnsafe` ishonchli emas.
+Frontend kelish, tushlikka chiqish, tushlikdan qaytish va ishdan chiqish amallaridan birini tanlaydi. Har bir amal Telegram’dan kelgan xom `Telegram.WebApp.initData` bilan tasdiqlanadi, serverdagi bir martalik topshiriqni oladi, GPS koordinatasini va beshta JPEG kadrni `multipart/form-data` orqali yuboradi. Backend 100 metr radius, xodim tasdig‘i, takroriy qayd, amal ketma-ketligi, yuz mosligi va harakat belgilarini qayta tekshiradi. `initDataUnsafe` ishonchli emas.
 
 Mini App’ni reply-keyboard `KeyboardButton(web_app)` orqali ochmang: Telegram bunday ochilishda `initData`ni bo‘sh berishi mumkin. Bot API rejimida inline `web_app` tugmasi ishlatiladi. 09:30 dan keyingi kelishdan oldin izohni Telegram chatda matn yoki ovozda yuborish kerak.
 

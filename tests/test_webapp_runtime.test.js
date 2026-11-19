@@ -183,9 +183,9 @@ function createWebView({platform, useTelegramLocation, enableBrowserFallback = f
         return response({error: 'outside_office_radius', distance_m: 1077, accuracy_m: payload.accuracy_m}, 403);
       }
       if (payload.accuracy_m > 50) {
-        return response({error: 'location_accuracy_insufficient', distance_m: 280, accuracy_m: payload.accuracy_m}, 422);
+        return response({error: 'location_accuracy_insufficient', distance_m: 95, accuracy_m: payload.accuracy_m}, 422);
       }
-      return response({ok: true, distance_m: 230, accuracy_m: payload.accuracy_m});
+      return response({ok: true, distance_m: 70, accuracy_m: payload.accuracy_m});
     }
     if (String(url).includes('/api/challenge')) {
       challengeActions.push(new URL(String(url)).searchParams.get('action'));
@@ -255,6 +255,7 @@ async function exerciseAccuracyRetry(environment) {
   assert.equal(video.srcObject, environment.cameraStream, 'preview remains attached after the GPS retry message');
   assert.equal(start.disabled, false);
   assert.match(environment.elements.get('notice').textContent, /aniqlik/i);
+  assert.match(environment.elements.get('notice').textContent, /100 m/i);
 
   const flow = start.click();
   await waitUntil(() => environment.locationCheckCalls() === 2, 'second server GPS check');
@@ -314,6 +315,7 @@ test('Android Telegram outside result reports server distance and source when pe
   const message = environment.elements.get('notice').textContent;
   assert.match(message, /WebView GPS ham alohida tekshirildi/);
   assert.match(message, /1077 m/);
+  assert.match(message, /100 m radius/);
   assert.match(message, /Telegram LocationManager|Telegram WebView GPS/);
   assert.match(message, /Davomat qayd etilmadi/);
   assert.doesNotMatch(message, /38\.8557873|65\.8002788/);
@@ -349,6 +351,7 @@ test('Telegram geofence rejection without browser fallback does not stop camera 
   const message = environment.elements.get('notice').textContent;
   assert.match(message, /1077 m/);
   assert.match(message, /±25 m/);
+  assert.match(message, /100 m radius/);
   assert.match(message, /Telegram LocationManager/);
   assert.match(message, /Ruxsat yoqilgan bo‘lsa ham/);
   assert.match(message, /Davomat qayd etilmadi/);

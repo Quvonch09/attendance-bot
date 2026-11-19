@@ -45,7 +45,8 @@ WEBAPP_API_HOST = os.getenv("WEBAPP_API_HOST", "127.0.0.1").strip()
 WEBAPP_API_PORT = int(os.getenv("WEBAPP_API_PORT", "8765"))
 OFFICE_LAT = float(os.getenv("OFFICE_LAT", "38.8557873"))
 OFFICE_LON = float(os.getenv("OFFICE_LON", "65.8002788"))
-GEOFENCE_METERS = float(os.getenv("GEOFENCE_METERS", "300"))
+# Fixed by the owner; ignore any legacy GEOFENCE_METERS value so it cannot widen the server-side fence.
+GEOFENCE_METERS = 100.0
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Asia/Tashkent"))
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data")).resolve()
 FACES_DIR = DATA_DIR / "faces"
@@ -341,6 +342,13 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def distance_from_office(lat: float, lon: float) -> float:
     return haversine_m(lat, lon, OFFICE_LAT, OFFICE_LON)
+
+
+def classify_telegram_location(distance_m: float, accuracy_m: float | None) -> str | None:
+    """Apply the same conservative geofence and GPS-accuracy rule to Bot API locations."""
+    from webapp_api import classify_location
+
+    return classify_location(distance_m, accuracy_m, GEOFENCE_METERS)
 
 
 def main_keyboard(uid: int | None = None):
@@ -1106,8 +1114,27 @@ async def main():
             return
         loc = message.location
         distance = distance_from_office(loc.latitude, loc.longitude)
-        if distance > GEOFENCE_METERS:
-            await message.answer(f"Siz ofisdan taxminan {round(distance)} m uzoqdasiz. Ruxsat etilgan radius {int(GEOFENCE_METERS)} m. Ofisga kelgach lokatsiyani qayta yuboring.", reply_markup=location_keyboard())
+        accuracy = getattr(loc, "horizontal_accuracy", None)
+        location_status = classify_telegram_location(distance, accuracy)
+        if location_status == "outside_office_radius":
+            await message.answer(
+                f"GPS o‘lchovi aniqlik oralig‘ini hisobga olganda ham ofisning 100 m radiusidan tashqarida (masofa taxminan {round(distance)} m). Agar ofisda bo‘lsangiz, ochiq eshikka yaqin joyda lokatsiyani qayta yuboring.",
+                reply_markup=location_keyboard(),
+            )
+            return
+        if location_status == "location_accuracy_insufficient":
+            accuracy_text = (
+                f" Qurilma bildirgan GPS aniqligi taxminan ±{round(accuracy)} m."
+                if isinstance(accuracy, (int, float)) and math.isfinite(accuracy) and accuracy > 0
+                else " Telegram GPS aniqlik ma’lumotini bermadi yoki u yaroqsiz."
+            )
+            await message.answer(
+                f"GPS aniqligi 100 m chegarasiga nisbatan noaniq.{accuracy_text} Ochiq eshikka yaqin, xavfsiz joyda 10–20 soniya kutib lokatsiyani qayta yuboring. Davomat qayd etilmadi.",
+                reply_markup=location_keyboard(),
+            )
+            return
+        if location_status:
+            await message.answer("GPS lokatsiyasini aniqlab bo‘lmadi. Joriy lokatsiyani qayta yuboring.", reply_markup=location_keyboard())
             return
         challenge = random.choice(["avval kameraga qarang, boshingizni chapga burib, keyin yana kameraga qarang", "avval kameraga qarang, boshingizni o‘ngga burib, keyin yana kameraga qarang"])
         payload = {"lat": loc.latitude, "lon": loc.longitude, "distance": distance, "challenge": challenge}

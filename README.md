@@ -4,11 +4,11 @@ Bot xodimlarning kelish-ketishini Telegram orqali qayd etadi. Oddiy xodim, admin
 
 ## Ish tartibi
 
-Ish joyi Innova maktabi koordinatasi (`38.8557873, 65.8002788`), geofence radiusi 300 metr, vaqt zonasi `Asia/Tashkent`. Xodim `/start` orqali ro‘yxatdan o‘tadi, biometrik suratdan foydalanishga rozilik beradi, ism-familiyasini va selfisini yuboradi. Admin yoki nazoratchilardan biri ro‘yxatdagi yuz suratini bir marta ko‘rib tasdiqlaydi. Xodim o‘z suratini o‘zi tasdiqlay olmaydi.
+Ish joyi Innova maktabi koordinatasi (`38.8557873, 65.8002788`), serverda qat’iy 100 metr geofence, vaqt zonasi `Asia/Tashkent`. Radius server kodida belgilanadi; eski muhit o‘zgaruvchisi uni kengaytira olmaydi. Xodim `/start` orqali ro‘yxatdan o‘tadi, biometrik suratdan foydalanishga rozilik beradi, ism-familiyasini va selfisini yuboradi. Admin yoki nazoratchilardan biri ro‘yxatdagi yuz suratini bir marta ko‘rib tasdiqlaydi. Xodim o‘z suratini o‘zi tasdiqlay olmaydi.
 
 Eslatmalar: 09:00 kelish, 12:00 tushlikka chiqish, 14:30 ishga qaytish va 18:00 ishdan chiqish. Tushlikka chiqish yoki qaytish belgilanmasa, 10 daqiqada nazoratchiga xabar boradi; 18:15 da kunlik hisobot yuboriladi. Xodim 09:30 dan keyin kelsa, Telegram chatga kechikish sababini matn yoki ovozda yuborishi kerak; matn va ovoz tegishli nazoratchilarga uzatiladi.
 
-Web App API yoqilgach, to‘rtta amalning har biri uchun Telegram imzosi, tasdiqlangan xodim, 300 metr geofence, bir martalik topshiriq, kamera kadrlari va ro‘yxatdagi yuz bilan moslik tekshiriladi. Ketma-ketlik: kelish → tushlikka chiqish → tushlikdan qaytish → ishdan chiqish. Har bir muvaffaqiyatli qayd admin/nazoratchilarga ism-vaqt bilan yuboriladi. Yuzni avtomatik solishtirish uchun DeepFace ishlatiladi.
+Web App API yoqilgach, to‘rtta amalning har biri uchun Telegram imzosi, tasdiqlangan xodim, 100 metr geofence, bir martalik topshiriq, kamera kadrlari va ro‘yxatdagi yuz bilan moslik tekshiriladi. Ketma-ketlik: kelish → tushlikka chiqish → tushlikdan qaytish → ishdan chiqish. Har bir muvaffaqiyatli qayd admin/nazoratchilarga ism-vaqt bilan yuboriladi. Yuzni avtomatik solishtirish uchun DeepFace ishlatiladi.
 
 ## Web App va server
 

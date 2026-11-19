@@ -22,8 +22,10 @@ class WebAppPermissionFlowTests(unittest.TestCase):
         self.assertIn("canFallbackToBrowser(error)", APP_JS)
         self.assertIn("alternativeSourceAttempted", APP_JS)
         self.assertIn("await checkLocationOnServer(position)", APP_JS)
+        self.assertNotIn("distance_m <= 100", APP_JS)
         self.assertNotIn("distance_m <= 300", APP_JS)
-        self.assertIn("300 m radius o‘zgarmagan", APP_JS)
+        self.assertIn("100 m radius", APP_JS)
+        self.assertNotIn("300 m", APP_JS)
 
     def test_permission_waits_have_timeouts_and_actionable_platform_help(self):
         self.assertIn("CameraPermissionTimeoutError", APP_JS)
@@ -40,6 +42,7 @@ class WebAppPermissionFlowTests(unittest.TestCase):
         self.assertIn("accuracy_m: position.coords.accuracy", APP_JS)
         self.assertIn("form.append('accuracy_m'", APP_JS)
         self.assertIn("error.locationSource = position.source", APP_JS)
+        self.assertNotIn("dist>100", APP_JS)
         self.assertNotIn("dist>300", APP_JS)
 
     def test_face_detector_uses_only_versioned_same_origin_assets(self):

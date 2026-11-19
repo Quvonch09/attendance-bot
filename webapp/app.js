@@ -44,14 +44,14 @@
     if (code === 'location_accuracy_insufficient'){
       const accuracy = Number(data.accuracy_m);
       const accuracyText = Number.isFinite(accuracy) && accuracy > 0 ? ` Qurilma bildirgan aniqlik: taxminan ±${Math.round(accuracy)} m.` : '';
-      return `GPS aniqligi 300 m chegarasiga nisbatan noaniq.${accuracyText} ${locationPermissionHelp()} Bino podvalida GPS devorlar sabab og‘ishi mumkin; ochiq eshikka yaqin, xavfsiz joyda 10–20 soniya kutib qayta tekshiring. Davomat qayd etilmadi; 300 m radius o‘zgarmagan.`;
+      return `GPS aniqligi 100 m chegarasiga nisbatan noaniq.${accuracyText} ${locationPermissionHelp()} Bino podvalida GPS devorlar sabab og‘ishi mumkin; ochiq eshikka yaqin, xavfsiz joyda 10–20 soniya kutib qayta tekshiring. Davomat qayd etilmadi; aniqroq GPS o‘lchovi bilan qayta urinib ko‘ring.`;
     }
     if (code === 'outside_office_radius'){
       const distance = Number(data.distance_m);
       const distanceText = Number.isFinite(distance) ? ` Server hisoblagan masofa taxminan ${Math.round(distance)} m.` : '';
       const accuracy = Number(data.accuracy_m);
       const accuracyText = Number.isFinite(accuracy) && accuracy > 0 ? ` Qurilma bildirgan GPS aniqligi: ±${Math.round(accuracy)} m.` : ' Qurilma bildirgan GPS aniqligi mavjud emas.';
-      return `Qurilma yuborgan GPS nuqtasi ofisning 300 m radiusidan tashqarida.${distanceText}${accuracyText} Ruxsat yoqilgan bo‘lsa ham, bino ichidagi GPS o‘lchovi xato bo‘lishi mumkin. Agar ofisda bo‘lsangiz, ochiq eshikka yaqin, xavfsiz joyda qayta tekshiring. Davomat qayd etilmadi; radius o‘zgarmagan.`;
+      return `GPS o‘lchovi aniqlik oralig‘ini hisobga olganda ham ofisning 100 m radiusidan tashqarida.${distanceText}${accuracyText} Ruxsat yoqilgan bo‘lsa ham, bino ichidagi GPS o‘lchovi xato bo‘lishi mumkin. Agar ofisda bo‘lsangiz, ochiq eshikka yaqin, xavfsiz joyda qayta tekshiring. Davomat qayd etilmadi.`;
     }
     return ({
       unauthorized:'Telegram tekshiruvi o‘tmadi. Web App-ni bot ichidan qayta oching.',

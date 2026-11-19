@@ -141,7 +141,7 @@ class SecurityCoreTests(unittest.TestCase):
             raw = telegram_init_data(token, now)
             app = build_api_app(
                 token=token, allowed_origin="https://web.example",
-                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                office_lat=1.0, office_lon=2.0, office_radius_m=100,
                 temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
                 get_event=lambda uid, kind: None, get_explanation=lambda uid: True,
                 add_event=lambda *args: None, compare_face=lambda *args: True,
@@ -184,14 +184,14 @@ class SecurityCoreTests(unittest.TestCase):
                 return face_ok
             app = build_api_app(
                 token=token, allowed_origin="https://web.example",
-                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                office_lat=1.0, office_lon=2.0, office_radius_m=100,
                 temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
                 get_event=lambda uid, kind: None, get_explanation=lambda uid: True,
                 add_event=lambda *args: recorded.append(args), compare_face=compare,
                 notify_admins=lambda text: None, format_name=lambda user: "Test",
                 late_minutes=lambda value: 0, hhmm=lambda value: "08:00",
                 now_local=lambda: datetime(2026, 1, 1, 8, 0),
-                distance_from_office=lambda lat, lon: 100, clock=lambda: now,
+                distance_from_office=lambda lat, lon: 70, clock=lambda: now,
                 liveness_check=lambda paths: liveness_ok,
             )
             async with TestClient(TestServer(app)) as client:
@@ -220,12 +220,20 @@ class SecurityCoreTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_geofence_is_fixed_at_100m_and_direct_telegram_location_fails_closed(self):
+        self.assertEqual(bot.GEOFENCE_METERS, 100.0)
+        self.assertEqual((bot.OFFICE_LAT, bot.OFFICE_LON), (38.8557873, 65.8002788))
+        self.assertIsNone(bot.classify_telegram_location(70.0, 20.0))
+        self.assertEqual(bot.classify_telegram_location(95.0, 10.0), "location_accuracy_insufficient")
+        self.assertEqual(bot.classify_telegram_location(120.0, 10.0), "outside_office_radius")
+        self.assertEqual(bot.classify_telegram_location(70.0, None), "location_accuracy_insufficient")
+
     def test_location_accuracy_classification_is_conservative(self):
-        self.assertIsNone(classify_location(250, 50, 300))
-        self.assertEqual(classify_location(280, 50, 300), "location_accuracy_insufficient")
-        self.assertEqual(classify_location(351, 50, 300), "outside_office_radius")
-        self.assertEqual(classify_location(100, 0, 300), "location_accuracy_insufficient")
-        self.assertEqual(classify_location(100, 100_001, 300), "location_accuracy_insufficient")
+        self.assertIsNone(classify_location(70, 20, 100))
+        self.assertEqual(classify_location(95, 10, 100), "location_accuracy_insufficient")
+        self.assertEqual(classify_location(120, 10, 100), "outside_office_radius")
+        self.assertEqual(classify_location(90, 0, 100), "location_accuracy_insufficient")
+        self.assertEqual(classify_location(90, 100_001, 100), "location_accuracy_insufficient")
 
     def test_haversine_uses_latitude_longitude_order_and_returns_meters(self):
         self.assertAlmostEqual(bot.distance_from_office(bot.OFFICE_LAT, bot.OFFICE_LON), 0, places=6)
@@ -239,10 +247,10 @@ class SecurityCoreTests(unittest.TestCase):
         async def scenario():
             token, now = "45678:location-accuracy-token", int(time.time())
             raw = telegram_init_data(token, now)
-            distances = {1.0: 250.0, 2.0: 280.0, 3.0: 360.0, 4.0: 200.0}
+            distances = {1.0: 70.0, 2.0: 95.0, 3.0: 120.0, 4.0: 70.0}
             app = build_api_app(
                 token=token, allowed_origin="https://web.example",
-                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                office_lat=1.0, office_lon=2.0, office_radius_m=100,
                 temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
                 get_event=lambda uid, kind: None, get_explanation=lambda uid: True,
                 add_event=lambda *args: None, compare_face=lambda *args: True,
@@ -255,23 +263,23 @@ class SecurityCoreTests(unittest.TestCase):
             async with TestClient(TestServer(app)) as client:
                 headers = {"Origin": "https://web.example", "X-Telegram-Init-Data": raw}
                 inside = await client.post("/api/location-check", headers=headers,
-                                           json={"latitude": 1.0, "longitude": 2.0, "accuracy_m": 50})
+                                           json={"latitude": 1.0, "longitude": 2.0, "accuracy_m": 20})
                 self.assertEqual(inside.status, 200)
-                self.assertEqual(await inside.json(), {"ok": True, "distance_m": 250, "accuracy_m": 50})
+                self.assertEqual(await inside.json(), {"ok": True, "distance_m": 70, "accuracy_m": 20})
 
                 uncertain = await client.post("/api/location-check", headers=headers,
-                                              json={"latitude": 2.0, "longitude": 2.0, "accuracy_m": 50})
+                                              json={"latitude": 2.0, "longitude": 2.0, "accuracy_m": 10})
                 self.assertEqual(uncertain.status, 422)
                 self.assertEqual((await uncertain.json())["error"], "location_accuracy_insufficient")
 
                 outside = await client.post("/api/location-check", headers=headers,
                                             json={"latitude": 3.0, "longitude": 2.0,
-                                                  "accuracy_m": 50, "distance_m": 0})
+                                                  "accuracy_m": 10, "distance_m": 0})
                 self.assertEqual(outside.status, 403)
                 outside_payload = await outside.json()
                 self.assertEqual(outside_payload["error"], "outside_office_radius")
-                self.assertEqual(outside_payload["distance_m"], 360)
-                self.assertEqual(outside_payload["accuracy_m"], 50)
+                self.assertEqual(outside_payload["distance_m"], 120)
+                self.assertEqual(outside_payload["accuracy_m"], 10)
 
                 missing_accuracy = await client.post("/api/location-check", headers=headers,
                                                      json={"latitude": 4.0, "longitude": 2.0})
@@ -284,13 +292,13 @@ class SecurityCoreTests(unittest.TestCase):
         async def scenario():
             token, now = "56789:final-location-accuracy-token", int(time.time())
             raw = telegram_init_data(token, now)
-            current_distance = [320.0]
+            current_distance = [95.0]
             recorded = []
             def get_event(uid, kind):
                 return {"happened_at": "2026-01-01T08:05:00"} if recorded else None
             app = build_api_app(
                 token=token, allowed_origin="https://web.example",
-                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                office_lat=1.0, office_lon=2.0, office_radius_m=100,
                 temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
                 get_event=get_event, get_explanation=lambda uid: True,
                 add_event=lambda *args: recorded.append(args), compare_face=lambda *args: True,
@@ -315,17 +323,17 @@ class SecurityCoreTests(unittest.TestCase):
                         form.add_field("frames", b"test-frame", filename=f"frame-{index}.jpg", content_type="image/jpeg")
                     return await client.post("/api/attendance", data=form, headers=headers)
 
-                uncertain = await submit(40)
+                uncertain = await submit(10)
                 self.assertEqual(uncertain.status, 422)
                 self.assertEqual((await uncertain.json())["error"], "location_accuracy_insufficient")
                 self.assertEqual(recorded, [])
 
-                current_distance[0] = 230.0
-                accepted = await submit(50)
+                current_distance[0] = 70.0
+                accepted = await submit(20)
                 self.assertEqual(accepted.status, 200)
                 result = await accepted.json()
-                self.assertEqual(result["distance_m"], 230)
-                self.assertEqual(recorded[0][4], 230.0)
+                self.assertEqual(result["distance_m"], 70)
+                self.assertEqual(recorded[0][4], 70.0)
 
         asyncio.run(scenario())
 
@@ -336,7 +344,7 @@ class SecurityCoreTests(unittest.TestCase):
             raw = telegram_init_data(token, now)
             app = build_api_app(
                 token=token, allowed_origin=origin,
-                office_lat=1.0, office_lon=2.0, office_radius_m=300,
+                office_lat=1.0, office_lon=2.0, office_radius_m=100,
                 temp_dir=tempfile.mkdtemp(), get_user=lambda uid: {"face_path": "portrait.jpg"},
                 get_event=lambda uid, kind: None, get_explanation=lambda uid: True,
                 add_event=lambda *args: None, compare_face=lambda *args: True,

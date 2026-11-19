@@ -79,7 +79,7 @@ def verify_init_data(init_data: str, bot_token: str, *, now_epoch: float | None 
         return None
 
 
-def classify_location(distance_m: float, accuracy_m: float, radius_m: float) -> str | None:
+def classify_location(distance_m: float, accuracy_m: float | None, radius_m: float) -> str | None:
     """Conservatively classify a server-computed distance and device accuracy."""
     try:
         distance_m = float(distance_m)
