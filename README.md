@@ -8,7 +8,7 @@ Ish joyi Innova maktabi koordinatasi (`38.8557873, 65.8002788`), serverda qat’
 
 Eslatmalar: 09:00 kelish, 12:00 tushlikka chiqish, 14:30 ishga qaytish va 18:00 ishdan chiqish. Tushlikka chiqish yoki qaytish belgilanmasa, 10 daqiqada nazoratchiga xabar boradi; 18:15 da kunlik hisobot yuboriladi. Xodim 09:30 dan keyin kelsa, Telegram chatga kechikish sababini matn yoki ovozda yuborishi kerak; matn va ovoz tegishli nazoratchilarga uzatiladi.
 
-Web App API yoqilgach, to‘rtta amalning har biri uchun Telegram imzosi, tasdiqlangan xodim, 100 metr geofence, bir martalik topshiriq, kamera kadrlari va ro‘yxatdagi yuz bilan moslik tekshiriladi. Ketma-ketlik: kelish → tushlikka chiqish → tushlikdan qaytish → ishdan chiqish. Har bir muvaffaqiyatli qayd admin/nazoratchilarga ism-vaqt bilan yuboriladi. Yuzni avtomatik solishtirish uchun DeepFace ishlatiladi.
+Har bir amal avval Telegram shaxsiy chatidagi «Joriy lokatsiyani yuborish» tugmasidan olingan lokatsiya bilan boshlanadi. Bot server 100 m radius va Telegram bildirgan aniqlikni tekshiradi; mos kelmasa davomat qayd etilmaydi. Mos lokatsiya uchun xodim va amal bilan bog‘langan, bir marta ishlatiladigan 3 daqiqalik token yaratiladi va inline Mini App tugmasiga uzatiladi. Xodim tugmani bosgach, Mini App serverda lokatsiyani qayta tekshiradi va kamerani avtomatik so‘raydi; iOS/Telegram yoki qurilma ruxsat oynasi uchun qo‘shimcha tasdiq yoki qayta bosishni talab qilishi mumkin. Kamera kadrlari, ro‘yxatdagi yuz bilan moslik va bir martalik harakat serverda tekshiriladi. Ketma-ketlik: kelish → tushlikka chiqish → tushlikdan qaytish → ishdan chiqish. Har bir muvaffaqiyatli qayd admin/nazoratchilarga ism-vaqt bilan yuboriladi. Yuzni avtomatik solishtirish uchun DeepFace ishlatiladi.
 
 ## Web App va server
 

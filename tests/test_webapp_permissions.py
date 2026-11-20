@@ -9,47 +9,39 @@ CSS = (ROOT / "webapp" / "styles.css").read_text(encoding="utf-8")
 
 
 class WebAppPermissionFlowTests(unittest.TestCase):
-    def test_camera_permission_is_resolved_before_location_is_requested(self):
+    def test_native_location_challenge_is_verified_before_camera_request(self):
         start = APP_JS.split("async function start(){", 1)[1].split("async function capture(frames, sessionId)", 1)[0]
-        self.assertLess(start.index("navigator.mediaDevices.getUserMedia"), start.index("await waitForCamera(cameraPromise)"))
-        self.assertLess(start.index("await waitForCamera(cameraPromise)"), start.index("await requestAndVerifyLocation()"))
+        self.assertLess(start.index("/api/challenge"), start.index("cameraPromise = navigator.mediaDevices.getUserMedia"))
+        self.assertIn("native_location_token", start)
+        self.assertIn("location_verified !== true", start)
         self.assertNotIn("Promise.all", start)
+        self.assertNotIn("navigator.geolocation", APP_JS)
+        self.assertNotIn("LocationManager", APP_JS)
+        self.assertNotIn("/api/location-check", APP_JS)
 
-    def test_telegram_location_has_an_explicit_os_permission_browser_fallback(self):
-        self.assertIn("tg && tg.LocationManager", APP_JS)
-        self.assertIn("manager.getLocation", APP_JS)
-        self.assertIn("navigator.geolocation.getCurrentPosition", APP_JS)
-        self.assertIn("canFallbackToBrowser(error)", APP_JS)
-        self.assertIn("alternativeSourceAttempted", APP_JS)
-        self.assertIn("await checkLocationOnServer(position)", APP_JS)
-        self.assertNotIn("distance_m <= 100", APP_JS)
-        self.assertNotIn("distance_m <= 300", APP_JS)
-        self.assertIn("100 m radius", APP_JS)
-        self.assertNotIn("300 m", APP_JS)
-
-    def test_permission_waits_have_timeouts_and_actionable_platform_help(self):
-        self.assertIn("CameraPermissionTimeoutError", APP_JS)
-        self.assertIn("30000", APP_JS)
-        self.assertIn("LocationPermissionTimeoutError", APP_JS)
-        self.assertIn("locationFailure", APP_JS)
+    def test_launch_token_is_read_from_fragment_and_camera_auto_start_has_manual_fallback(self):
+        self.assertIn("window.location.hash", APP_JS)
+        self.assertIn("native_location_token", APP_JS)
+        self.assertIn("else if (autoStart)", APP_JS)
+        self.assertIn("Kamera avtomatik ochilmoqda", APP_JS)
+        self.assertIn("Kamerani qayta ochish", APP_JS)
+        self.assertIn("NotAllowedError", APP_JS)
         self.assertIn("iPhone’da Sozlamalar", APP_JS)
-        self.assertIn("Android’da Sozlamalar", APP_JS)
 
-    def test_telegram_and_browser_accuracy_reach_authoritative_server_checks(self):
-        self.assertIn("location.horizontal_accuracy", APP_JS)
-        self.assertIn("raw.accuracy", APP_JS)
-        self.assertIn("/api/location-check", APP_JS)
-        self.assertIn("accuracy_m: position.coords.accuracy", APP_JS)
-        self.assertIn("form.append('accuracy_m'", APP_JS)
-        self.assertIn("error.locationSource = position.source", APP_JS)
-        self.assertNotIn("dist>100", APP_JS)
-        self.assertNotIn("dist>300", APP_JS)
+    def test_attendance_upload_has_no_client_supplied_location(self):
+        capture = APP_JS.split("async function capture(frames, sessionId)", 1)[1].split("$('action-select')", 1)[0]
+        self.assertIn("challenge_id", capture)
+        self.assertIn("form.append('action'", capture)
+        self.assertNotIn("latitude", capture)
+        self.assertNotIn("longitude", capture)
+        self.assertNotIn("accuracy_m", capture)
+        self.assertIn("challengeConsumed = true", capture)
 
     def test_face_detector_uses_only_versioned_same_origin_assets(self):
         self.assertIn("window.FaceDetection", APP_JS)
         self.assertIn("/face-detection/${FACE_DETECTION_VERSION}/${filename}", APP_JS)
         self.assertIn('/face-detection/v0.4.1646425229/face_detection.js', HTML)
-        self.assertIn("Yuzni kadrga joylashtirish shu Web App ichida bajariladi", HTML)
+        self.assertIn("Telegram chatdagi lokatsiya", HTML)
         self.assertNotIn("tfhub.dev", APP_JS)
         self.assertNotIn("cdn.jsdelivr.net", APP_JS)
 

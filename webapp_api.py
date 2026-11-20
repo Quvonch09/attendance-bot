@@ -38,6 +38,9 @@ FACE_DETECTION_ASSETS = {
     "face_detection_short_range.tflite": ("application/octet-stream", False),
 }
 MAX_CHALLENGES = 4096
+NATIVE_LOCATION_TTL = 180
+MAX_NATIVE_LOCATION_GRANTS = 4096
+_native_location_grants: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
 
 def verify_init_data(init_data: str, bot_token: str, *, now_epoch: float | None = None) -> dict[str, Any] | None:
@@ -96,6 +99,60 @@ def classify_location(distance_m: float, accuracy_m: float | None, radius_m: flo
     if distance_m + accuracy_m > radius_m:
         return "location_accuracy_insufficient"
     return None
+
+
+def _prune_native_location_grants(now_epoch: float) -> None:
+    for key in [key for key, value in _native_location_grants.items() if value["expires"] <= now_epoch]:
+        _native_location_grants.pop(key, None)
+    while len(_native_location_grants) > MAX_NATIVE_LOCATION_GRANTS:
+        _native_location_grants.popitem(last=False)
+
+
+def issue_native_location_token(uid: int, action: str, latitude: float, longitude: float,
+                                accuracy_m: float, distance_m: float, radius_m: float = 100.0,
+                                *, now_epoch: float | None = None) -> str:
+    """Store an already measured Telegram location briefly and return an opaque token.
+
+    Raw coordinates remain in process memory only; callers must never log this record.
+    The Web App redeems the token once, bound to the signed Telegram user and action.
+    """
+    now = time.time() if now_epoch is None else float(now_epoch)
+    try:
+        uid = int(uid)
+        latitude, longitude = float(latitude), float(longitude)
+        accuracy_m, distance_m, radius_m = float(accuracy_m), float(distance_m), float(radius_m)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("invalid native location")
+    if action not in ALLOWED_ACTIONS or not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+        raise ValueError("invalid native location")
+    if not all(math.isfinite(value) for value in (latitude, longitude, accuracy_m, distance_m, radius_m)):
+        raise ValueError("invalid native location")
+    if classify_location(distance_m, accuracy_m, radius_m) is not None:
+        raise ValueError("native location is not verified")
+    _prune_native_location_grants(now)
+    token = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    _native_location_grants[digest] = {
+        "uid": uid, "action": action, "latitude": latitude, "longitude": longitude,
+        "accuracy_m": accuracy_m, "distance_m": distance_m, "expires": now + NATIVE_LOCATION_TTL,
+    }
+    _prune_native_location_grants(now)
+    return token
+
+
+def consume_native_location_token(uid: int, action: str, token: str,
+                                  *, now_epoch: float | None = None) -> dict[str, Any] | None:
+    """Redeem an opaque native-location token once for its original user/action."""
+    now = time.time() if now_epoch is None else float(now_epoch)
+    _prune_native_location_grants(now)
+    if not isinstance(token, str) or not token or len(token) > 128:
+        return None
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    grant = _native_location_grants.get(digest)
+    if not grant or grant["uid"] != int(uid) or grant["action"] != action or grant["expires"] <= now:
+        return None
+    _native_location_grants.pop(digest, None)
+    return {key: value for key, value in grant.items() if key != "expires"}
 
 
 def detect_face_liveness(frame_paths: list[str | Path]) -> bool:
@@ -249,9 +306,20 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         user = await invoke(get_user, uid)
         if not user:
             return web.json_response({"error": "not_approved"}, status=403)
-        action = request.query.get("action", "")
+        if request.method != "POST" or request.content_type != "application/json":
+            return web.json_response({"error": "native_location_required"}, status=403)
+        try:
+            values = await request.json()
+            if not isinstance(values, dict):
+                raise ValueError
+            action = str(values.get("action", ""))
+            native_token = values.get("native_location_token", "")
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return web.json_response({"error": "invalid_request"}, status=400)
         if action not in ALLOWED_ACTIONS:
             return web.json_response({"error": "invalid_action"}, status=400)
+        if not isinstance(native_token, str) or not native_token:
+            return web.json_response({"error": "native_location_required"}, status=403)
         if await invoke(get_event, uid, action):
             return web.json_response({"error": "duplicate_action"}, status=409)
         required_before = ALLOWED_ACTIONS[:ALLOWED_ACTIONS.index(action)]
@@ -260,14 +328,34 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
                 return web.json_response({"error": "sequence_invalid"}, status=409)
         if action == "checkin" and now_local().time() >= datetime_time(9, 30) and not await invoke(get_explanation, uid):
             return web.json_response({"error": "late_reason_required"}, status=428)
+        grant = consume_native_location_token(uid, action, native_token, now_epoch=clock())
+        if not grant:
+            return web.json_response({"error": "native_location_invalid"}, status=403)
+        distance, location_error = await measure_location(
+            grant["latitude"], grant["longitude"], grant["accuracy_m"]
+        )
+        if location_error:
+            return location_response(distance, grant["accuracy_m"], location_error)
         prune()
         cid = secrets.token_urlsafe(32)
         left, right = secrets.randbelow(9) + 1, secrets.randbelow(9) + 1
         direction = secrets.choice(("left", "right"))
-        challenges[cid] = {"uid": uid, "action": action, "expires": clock() + CHALLENGE_TTL, "left": left, "right": right, "direction": direction}
+        challenges[cid] = {
+            "uid": uid, "action": action, "expires": clock() + CHALLENGE_TTL,
+            "left": left, "right": right, "direction": direction,
+            "location": {
+                "latitude": grant["latitude"], "longitude": grant["longitude"],
+                "accuracy_m": grant["accuracy_m"], "distance_m": distance,
+            },
+        }
         prune()
         direction_uz = "chapga" if direction == "left" else "o‘ngga"
-        return web.json_response({"challenge_id": cid, "instruction": f"Kameraga qarab boshingizni {direction_uz} buring, so‘ng yana kameraga qarang.", "expires_in": CHALLENGE_TTL})
+        return web.json_response({
+            "challenge_id": cid,
+            "instruction": f"Kameraga qarab boshingizni {direction_uz} buring, so‘ng yana kameraga qarang.",
+            "expires_in": CHALLENGE_TTL, "location_verified": True,
+            "distance_m": round(distance), "accuracy_m": round(grant["accuracy_m"]),
+        })
 
     async def attendance(request: web.Request):
         uid = authenticated_uid(request)
@@ -283,7 +371,7 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         files: list[tuple[str, bytes]] = []
         total = 0
         async for part in reader:
-            if part.name in ("latitude", "longitude", "accuracy_m", "challenge_id", "action"):
+            if part.name in ("challenge_id", "action"):
                 if part.filename:
                     return web.json_response({"error": "invalid_form"}, status=400)
                 value = await part.text()
@@ -311,25 +399,22 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
             else:
                 return web.json_response({"error": "invalid_form"}, status=400)
         try:
-            lat, lon = float(values["latitude"]), float(values["longitude"])
             cid = values["challenge_id"]
             action = values["action"]
             if action not in ALLOWED_ACTIONS:
                 raise ValueError
-            if not math.isfinite(lat) or not math.isfinite(lon) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
-                raise ValueError
         except (KeyError, ValueError, OverflowError):
-            return web.json_response({"error": "invalid_location_or_challenge"}, status=400)
-        try:
-            accuracy_m = float(values["accuracy_m"])
-        except (KeyError, ValueError, OverflowError):
-            return web.json_response({"error": "location_accuracy_insufficient"}, status=422)
+            return web.json_response({"error": "invalid_challenge"}, status=400)
         prune()
         entry = challenges.pop(cid, None)  # one-use even when later validation fails
         if not entry or entry["uid"] != uid or entry["action"] != action or entry["expires"] <= clock():
             return web.json_response({"error": "challenge_expired"}, status=400)
         if not MIN_FRAMES <= len(files) <= MAX_FRAMES:
             return web.json_response({"error": "invalid_frame_count"}, status=400)
+        location = entry.get("location")
+        if not isinstance(location, dict):
+            return web.json_response({"error": "native_location_required"}, status=403)
+        lat, lon, accuracy_m = location["latitude"], location["longitude"], location["accuracy_m"]
         distance, location_error_code = await measure_location(lat, lon, accuracy_m)
         if location_error_code:
             return location_response(distance, accuracy_m, location_error_code)
@@ -426,6 +511,7 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
     app.router.add_route("GET", "/face-detection/{version}/{asset}", face_detection_asset)
     app.router.add_route("POST", "/api/location-check", location_check)
     app.router.add_route("GET", "/api/challenge", challenge)
+    app.router.add_route("POST", "/api/challenge", challenge)
     app.router.add_route("POST", "/api/attendance", attendance)
     app.router.add_route("OPTIONS", "/api/{tail:.*}", options)
     return app

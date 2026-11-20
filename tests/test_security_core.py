@@ -10,6 +10,7 @@ import asyncio
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from aiohttp import FormData
@@ -20,7 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aiogram.utils.web_app import check_webapp_signature
 
 import bot
-from webapp_api import build_api_app, classify_location, verify_init_data
+from webapp_api import (
+    build_api_app, classify_location, consume_native_location_token,
+    issue_native_location_token, verify_init_data,
+)
 
 
 def telegram_init_data(token: str, now: int) -> str:
@@ -34,6 +38,12 @@ def telegram_init_data(token: str, now: int) -> str:
     key = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
     fields["hash"] = hmac.new(key, check.encode(), hashlib.sha256).hexdigest()
     return urlencode(fields)
+
+
+def test_native_location(action: str, now: int, *, distance_m: float = 70, accuracy_m: float = 20):
+    return issue_native_location_token(
+        123456789, action, 1.0, 2.0, accuracy_m, distance_m, 100, now_epoch=now
+    )
 
 
 class SecurityCoreTests(unittest.TestCase):
@@ -108,8 +118,65 @@ class SecurityCoreTests(unittest.TestCase):
                 bot.webapp_action_url("lunch_in"),
                 "https://app.example.test/attendance?source=telegram&action=lunch_in",
             )
+            launch = bot.webapp_action_url("checkin", "opaque-once-token")
+            self.assertIn("action=checkin", launch)
+            self.assertIn("#native_location_token=opaque-once-token&autostart=1", launch)
+            self.assertNotIn("opaque-once-token", launch.split("#", 1)[0])
         finally:
             bot.WEBAPP_URL = original_url
+
+    def test_all_attendance_actions_request_telegram_location_before_webapp(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as directory:
+                original_db = bot.DB_PATH
+                original_enabled, original_url = bot.WEBAPP_API_ENABLED, bot.WEBAPP_URL
+                original_approved, original_now = bot.require_approved, bot.now_local
+                bot.DB_PATH = Path(directory) / "attendance.sqlite3"
+                bot.WEBAPP_API_ENABLED = True
+                bot.WEBAPP_URL = "https://app.example.test/attendance"
+                bot.require_approved = lambda message: asyncio.sleep(0, result=True)
+                bot.now_local = lambda: datetime(2026, 1, 1, 8, 0)
+                bot.init_db()
+
+                class FakeMessage:
+                    from_user = SimpleNamespace(id=123456789)
+                    answers = []
+
+                    async def answer(self, text, reply_markup=None):
+                        self.answers.append((text, reply_markup))
+
+                try:
+                    for action in ("checkin", "lunch_out", "lunch_in", "checkout"):
+                        message = FakeMessage()
+                        await bot.send_webapp_prompt(message, action)
+                        state = bot.get_pending(message.from_user.id)
+                        self.assertEqual(state["task"], "webapp_attendance")
+                        self.assertEqual(state["step"], "location")
+                        self.assertEqual(state["payload"]["action"], action)
+                        text, markup = message.answers[-1]
+                        self.assertIn("Joriy lokatsiyani yuborish", text)
+                        button = markup.keyboard[0][0]
+                        self.assertTrue(button.request_location)
+                        self.assertIsNone(getattr(button, "web_app", None))
+                finally:
+                    bot.DB_PATH = original_db
+                    bot.WEBAPP_API_ENABLED, bot.WEBAPP_URL = original_enabled, original_url
+                    bot.require_approved, bot.now_local = original_approved, original_now
+
+        asyncio.run(scenario())
+
+    def test_native_location_token_is_short_lived_one_use_and_bound_to_user_and_action(self):
+        token = issue_native_location_token(123456789, "checkin", 1.0, 2.0, 20, 70, 100, now_epoch=1000)
+        self.assertIsNone(consume_native_location_token(123456788, "checkin", token, now_epoch=1001))
+        self.assertIsNone(consume_native_location_token(123456789, "lunch_out", token, now_epoch=1001))
+        grant = consume_native_location_token(123456789, "checkin", token, now_epoch=1001)
+        self.assertEqual((grant["latitude"], grant["longitude"], grant["distance_m"]), (1.0, 2.0, 70.0))
+        self.assertIsNone(consume_native_location_token(123456789, "checkin", token, now_epoch=1002))
+
+        expired = issue_native_location_token(123456789, "checkin", 1.0, 2.0, 20, 70, 100, now_epoch=1000)
+        self.assertIsNone(consume_native_location_token(123456789, "checkin", expired, now_epoch=1180))
+        with self.assertRaises(ValueError):
+            issue_native_location_token(123456789, "checkin", 1.0, 2.0, 10, 120, 100, now_epoch=1000)
 
     def test_webapp_events_require_order_and_reject_duplicates(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -153,7 +220,9 @@ class SecurityCoreTests(unittest.TestCase):
             )
             async with TestClient(TestServer(app)) as client:
                 headers = {"Origin": "https://web.example", "X-Telegram-Init-Data": raw}
-                result = await client.get("/api/challenge?action=checkin", headers=headers)
+                native_token = test_native_location("checkin", now, distance_m=0, accuracy_m=10)
+                result = await client.post("/api/challenge", headers=headers,
+                                           json={"action": "checkin", "native_location_token": native_token})
                 payload = await result.json()
                 self.assertEqual(result.status, 200)
                 cid = payload["challenge_id"]
@@ -162,9 +231,6 @@ class SecurityCoreTests(unittest.TestCase):
                     form = FormData()
                     form.add_field("challenge_id", cid)
                     form.add_field("action", action)
-                    form.add_field("latitude", "1.0")
-                    form.add_field("longitude", "2.0")
-                    form.add_field("accuracy_m", "10")
                     return await client.post("/api/attendance", data=form, headers=headers)
 
                 mismatch = await submit("lunch_out")
@@ -196,12 +262,12 @@ class SecurityCoreTests(unittest.TestCase):
             )
             async with TestClient(TestServer(app)) as client:
                 headers = {"Origin": "https://web.example", "X-Telegram-Init-Data": raw}
-                challenge = await client.get("/api/challenge?action=checkin", headers=headers)
+                native_token = test_native_location("checkin", now, distance_m=70, accuracy_m=20)
+                challenge = await client.post("/api/challenge", headers=headers,
+                                              json={"action": "checkin", "native_location_token": native_token})
                 challenge_id = (await challenge.json())["challenge_id"]
                 form = FormData()
-                for name, value in (("challenge_id", challenge_id), ("action", "checkin"),
-                                    ("latitude", "1.0"), ("longitude", "2.0"),
-                                    ("accuracy_m", "20")):
+                for name, value in (("challenge_id", challenge_id), ("action", "checkin")):
                     form.add_field(name, value)
                 for index in range(5):
                     form.add_field("frames", b"test-frame", filename=f"frame-{index}.jpg",
@@ -292,7 +358,7 @@ class SecurityCoreTests(unittest.TestCase):
         async def scenario():
             token, now = "56789:final-location-accuracy-token", int(time.time())
             raw = telegram_init_data(token, now)
-            current_distance = [95.0]
+            current_distance = [70.0]
             recorded = []
             def get_event(uid, kind):
                 return {"happened_at": "2026-01-01T08:05:00"} if recorded else None
@@ -311,25 +377,29 @@ class SecurityCoreTests(unittest.TestCase):
             async with TestClient(TestServer(app)) as client:
                 headers = {"Origin": "https://web.example", "X-Telegram-Init-Data": raw}
 
-                async def submit(accuracy):
-                    challenge_response = await client.get("/api/challenge?action=checkin", headers=headers)
+                async def issue_challenge(accuracy, distance_after_challenge=70.0):
+                    current_distance[0] = 70.0
+                    native_token = test_native_location("checkin", now, distance_m=70, accuracy_m=accuracy)
+                    challenge_response = await client.post(
+                        "/api/challenge", headers=headers,
+                        json={"action": "checkin", "native_location_token": native_token},
+                    )
+                    self.assertEqual(challenge_response.status, 200)
                     cid = (await challenge_response.json())["challenge_id"]
+                    current_distance[0] = distance_after_challenge
                     form = FormData()
-                    for name, value in (("challenge_id", cid), ("action", "checkin"),
-                                        ("latitude", "1.0"), ("longitude", "2.0"),
-                                        ("accuracy_m", str(accuracy))):
+                    for name, value in (("challenge_id", cid), ("action", "checkin")):
                         form.add_field(name, value)
                     for index in range(3):
                         form.add_field("frames", b"test-frame", filename=f"frame-{index}.jpg", content_type="image/jpeg")
                     return await client.post("/api/attendance", data=form, headers=headers)
 
-                uncertain = await submit(10)
+                uncertain = await issue_challenge(20, distance_after_challenge=95.0)
                 self.assertEqual(uncertain.status, 422)
                 self.assertEqual((await uncertain.json())["error"], "location_accuracy_insufficient")
                 self.assertEqual(recorded, [])
 
-                current_distance[0] = 70.0
-                accepted = await submit(20)
+                accepted = await issue_challenge(20)
                 self.assertEqual(accepted.status, 200)
                 result = await accepted.json()
                 self.assertEqual(result["distance_m"], 70)
@@ -386,11 +456,38 @@ class SecurityCoreTests(unittest.TestCase):
                 )
                 self.assertEqual(denied_asset.status, 404)
                 headers = {**trusted, "X-Telegram-Init-Data": raw}
-                challenge = await client.get("/api/challenge?action=checkin", headers=headers)
+                missing_token = await client.post(
+                    "/api/challenge", headers=headers, json={"action": "checkin"}
+                )
+                self.assertEqual(missing_token.status, 403)
+                self.assertEqual((await missing_token.json())["error"], "native_location_required")
+                native_token = test_native_location("checkin", now, distance_m=0, accuracy_m=20)
+                challenge = await client.post(
+                    "/api/challenge", headers=headers,
+                    json={"action": "checkin", "native_location_token": native_token},
+                )
                 self.assertEqual(challenge.status, 200)
-                wrong_origin = await client.get(
-                    "/api/challenge?action=checkin",
+                challenge_id = (await challenge.json())["challenge_id"]
+                injected_location = FormData()
+                injected_location.add_field("challenge_id", challenge_id)
+                injected_location.add_field("action", "checkin")
+                injected_location.add_field("latitude", "1.0")
+                injected_location.add_field("longitude", "2.0")
+                injected_location.add_field(
+                    "frames", b"test-frame", filename="frame.jpg", content_type="image/jpeg"
+                )
+                rejected_upload = await client.post(
+                    "/api/attendance", data=injected_location, headers=headers
+                )
+                self.assertEqual(rejected_upload.status, 400)
+                self.assertEqual((await rejected_upload.json())["error"], "invalid_form")
+                legacy = await client.get("/api/challenge?action=checkin", headers=headers)
+                self.assertEqual(legacy.status, 403)
+                rejected_token = test_native_location("checkin", now, distance_m=0, accuracy_m=20)
+                wrong_origin = await client.post(
+                    "/api/challenge",
                     headers={**headers, "Origin": "https://evil.example"},
+                    json={"action": "checkin", "native_location_token": rejected_token},
                 )
                 self.assertEqual(wrong_origin.status, 403)
                 missing_proxy_origin = await client.get("/", headers={})

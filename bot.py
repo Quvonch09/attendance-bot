@@ -365,11 +365,17 @@ def main_keyboard(uid: int | None = None):
     return ReplyKeyboardMarkup(keyboard=keyboard, is_persistent=True, resize_keyboard=True)
 
 
-def webapp_action_url(action: str) -> str:
+def webapp_action_url(action: str, native_location_token: str | None = None) -> str:
     parsed = urlsplit(WEBAPP_URL)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query["action"] = action
-    return urlunsplit(parsed._replace(query=urlencode(query)))
+    fragment = parsed.fragment
+    if native_location_token:
+        fragment_values = dict(parse_qsl(fragment, keep_blank_values=True))
+        fragment_values["native_location_token"] = native_location_token
+        fragment_values["autostart"] = "1"
+        fragment = urlencode(fragment_values)
+    return urlunsplit(parsed._replace(query=urlencode(query), fragment=fragment))
 
 
 def menu_for(message: Message):
@@ -386,13 +392,15 @@ async def send_webapp_prompt(message: Message, action: str):
         set_pending(message.from_user.id, "webapp_late_reason", "reason")
         await message.answer("09:30 dan keyin kelayotganingiz uchun avval kechikish sababini matn yoki ovozli xabar bilan yuboring. Izoh nazoratchilarga yuboriladi; so‘ng kelish tugmasini qayta bosing.")
         return
-    labels = {"checkin": "✅ Ishga kelishni", "lunch_out": "🍽 Tushlikka chiqishni", "lunch_in": "🔙 Tushlikdan qaytishni", "checkout": "🏁 Ishdan chiqishni"}
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(text=f"{labels[action]} tasdiqlash", web_app=WebAppInfo(url=webapp_action_url(action)))
-        ]]
+    labels = {"checkin": "ishga kelish", "lunch_out": "tushlikka chiqish", "lunch_in": "tushlikdan qaytish", "checkout": "ishdan chiqish"}
+    if action not in labels:
+        await message.answer("Davomat amali tanilmadi. Asosiy tugmalardan qayta tanlang.", reply_markup=main_keyboard(message.from_user.id))
+        return
+    set_pending(message.from_user.id, "webapp_attendance", "location", {"action": action})
+    await message.answer(
+        f"{labels[action].capitalize()} uchun avval Telegram chatdagi «Joriy lokatsiyani yuborish» tugmasini bosing. Server lokatsiyani 100 m radius va aniqlik bilan tekshiradi; mos kelsa kamera tugmasi chiqadi.",
+        reply_markup=location_keyboard(),
     )
-    await message.answer(f"{labels[action]} yuz mosligi, bir martalik harakat topshirig‘i va GPS (barcha amallar uchun majburiy) bilan bajaring.", reply_markup=keyboard)
 
 
 def consent_keyboard():
@@ -1099,7 +1107,62 @@ async def main():
     async def on_location(message: Message):
         uid = message.from_user.id
         if WEBAPP_API_ENABLED:
-            await message.answer("Joylashuv faqat davomat Web App ichidagi yuz tekshiruvi bilan qabul qilinadi.", reply_markup=main_keyboard(uid))
+            state = get_pending(uid)
+            if not state or state["task"] != "webapp_attendance" or state["step"] != "location":
+                await message.answer("Avval kerakli davomat amalini tanlang, keyin shu chatdagi joriy lokatsiya tugmasidan foydalaning.", reply_markup=main_keyboard(uid))
+                return
+            if getattr(message.chat.type, "value", message.chat.type) != "private" or getattr(message, "forward_origin", None):
+                await message.answer("Faqat bot bilan shaxsiy chatdan yuborilgan, boshqa chatdan ko‘chirilmagan joriy lokatsiya qabul qilinadi.", reply_markup=location_keyboard())
+                return
+            if not await require_approved(message):
+                clear_pending(uid)
+                return
+            action = state["payload"].get("action")
+            labels = {"checkin": "ishga kelish", "lunch_out": "tushlikka chiqish", "lunch_in": "tushlikdan qaytish", "checkout": "ishdan chiqish"}
+            if action not in labels:
+                clear_pending(uid)
+                await message.answer("Davomat amali muddati tugadi. Asosiy tugmadan qayta boshlang.", reply_markup=main_keyboard(uid))
+                return
+            loc = message.location
+            distance = distance_from_office(loc.latitude, loc.longitude)
+            accuracy = getattr(loc, "horizontal_accuracy", None)
+            location_status = classify_telegram_location(distance, accuracy)
+            if location_status == "outside_office_radius":
+                await message.answer(
+                    f"Lokatsiya ofisning 100 m radiusidan tashqarida (server hisoblagan masofa taxminan {round(distance)} m). Ofisda bo‘lsangiz, Telegram joriy lokatsiya tugmasidan qayta yuboring. Davomat qayd etilmadi.",
+                    reply_markup=location_keyboard(),
+                )
+                return
+            if location_status == "location_accuracy_insufficient":
+                accuracy_text = f" Telegram bildirgan aniqlik ±{round(accuracy)} m." if isinstance(accuracy, (int, float)) and math.isfinite(accuracy) and accuracy > 0 else " Telegram bu lokatsiya uchun aniqlik qiymatini bermadi."
+                await message.answer(
+                    f"GPS aniqligi 100 m chegaraga nisbatan yetarli emas.{accuracy_text} Telegram lokatsiya tugmasidan qayta yuboring; noaniq o‘lchov bilan davomat qayd etilmaydi.",
+                    reply_markup=location_keyboard(),
+                )
+                return
+            if location_status:
+                await message.answer("Telegram joriy lokatsiyasini tekshirib bo‘lmadi. Tugmadan qayta yuboring.", reply_markup=location_keyboard())
+                return
+            from webapp_api import issue_native_location_token
+            try:
+                native_token = issue_native_location_token(
+                    uid, action, loc.latitude, loc.longitude, accuracy, distance,
+                    radius_m=GEOFENCE_METERS,
+                )
+            except ValueError:
+                await message.answer("Lokatsiya server tasdiqlashiga mos kelmadi. Telegram tugmasidan qayta yuboring.", reply_markup=location_keyboard())
+                return
+            clear_pending(uid)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="📷 Kamerani ochish va yuzni tekshirish",
+                    web_app=WebAppInfo(url=webapp_action_url(action, native_token)),
+                )
+            ]])
+            await message.answer(
+                f"✅ Telegram chatdagi lokatsiya serverda tasdiqlandi (ofisdan taxminan {round(distance)} m). Endi quyidagi tugmani bosing: Mini App kamerani avtomatik so‘raydi; qurilma ruxsat so‘rasa, ruxsat bering.",
+                reply_markup=keyboard,
+            )
             return
         state = get_pending(uid)
         if not state:
