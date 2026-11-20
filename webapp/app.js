@@ -35,7 +35,7 @@
     if (code === 'location_accuracy_insufficient'){
       const accuracy = Number(data.accuracy_m);
       const accuracyText = Number.isFinite(accuracy) && accuracy > 0 ? ` Telegram bildirgan aniqlik taxminan ±${Math.round(accuracy)} m.` : ' Telegram bu safar aniqlik qiymatini bermadi.';
-      return `Telegram lokatsiyasining aniqligini server tasdiqlay olmadi.${accuracyText} Bu siz ofisning 100 m hududidan tashqaridasiz degani emas. Davomat qayd etilmadi. Ofis podvalida GPS xato bo‘lishi mumkin; bot chatidagi «Joriy lokatsiyani yuborish» tugmasini kirish eshigiga yaqin yoki ochiq joyda qayta bosing.`;
+      return `Telegram lokatsiyasi juda noaniq keldi.${accuracyText} Davomat qayd etilmadi. Joylashuv xizmatini (GPS) yoqing va bot chatidagi «Joriy lokatsiyani yuborish» tugmasini kirish eshigiga yaqin joyda qayta bosing.`;
     }
     if (code === 'outside_office_radius'){
       const distance = Number(data.distance_m);
@@ -308,7 +308,8 @@
           error.challengeFailure = true; error.challengeCode = 'native_location_invalid'; throw error;
         }
         challengeConsumed = false; nativeLocationToken = ''; removeNativeLocationTokenFromUrl();
-        $('location-status').textContent = `Telegram chatidagi lokatsiya tasdiqlandi · taxminan ${challenge.distance_m} m · aniqlik ±${challenge.accuracy_m} m`;
+        const verifiedAccuracy = Number(challenge.accuracy_m);
+        $('location-status').textContent = `Telegram chatidagi lokatsiya tasdiqlandi · ofisdan taxminan ${challenge.distance_m} m` + (challenge.accuracy_m !== null && Number.isFinite(verifiedAccuracy) && verifiedAccuracy > 0 ? ` · aniqlik ±${Math.round(verifiedAccuracy)} m` : '');
         markDone('step-location'); $('instruction').textContent = challenge.instruction;
         $('motion-status').textContent = 'Yuz mosligi va harakat serverda tekshiriladi';
       }

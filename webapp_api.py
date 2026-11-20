@@ -82,22 +82,45 @@ def verify_init_data(init_data: str, bot_token: str, *, now_epoch: float | None 
         return None
 
 
+def _optional_accuracy(accuracy_m: Any) -> float | None:
+    """Return a usable accuracy radius, or None when the client did not send one.
+
+    Telegram's ``horizontal_accuracy`` is optional and many clients (notably iOS
+    and one-off "send current location") omit it, so a missing value must not
+    block attendance on its own.
+    """
+    if accuracy_m is None or isinstance(accuracy_m, bool):
+        return None
+    try:
+        value = float(accuracy_m)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
 def classify_location(distance_m: float, accuracy_m: float | None, radius_m: float) -> str | None:
-    """Conservatively classify a server-computed distance and device accuracy."""
+    """Classify a server-computed distance against the fixed office radius.
+
+    The rule is simply: the reported point must lie within ``radius_m`` of the
+    office. Device accuracy is informational only, except that a fix reported
+    as wildly imprecise (worse than MAX_LOCATION_ACCURACY_M) is not trusted.
+    The previous ``distance + accuracy <= radius`` rule rejected employees who
+    were inside the building whenever indoor GPS reported e.g. ±40 m.
+    """
     try:
         distance_m = float(distance_m)
-        accuracy_m = float(accuracy_m)
         radius_m = float(radius_m)
     except (TypeError, ValueError, OverflowError):
-        return "location_accuracy_insufficient"
+        return "location_unavailable"
     if not math.isfinite(distance_m) or distance_m < 0 or not math.isfinite(radius_m) or radius_m <= 0:
         return "location_unavailable"
-    if not math.isfinite(accuracy_m) or accuracy_m <= 0 or accuracy_m > MAX_LOCATION_ACCURACY_M:
+    accuracy = _optional_accuracy(accuracy_m)
+    if accuracy is not None and accuracy > MAX_LOCATION_ACCURACY_M:
         return "location_accuracy_insufficient"
-    if distance_m - accuracy_m > radius_m:
+    if distance_m > radius_m:
         return "outside_office_radius"
-    if distance_m + accuracy_m > radius_m:
-        return "location_accuracy_insufficient"
     return None
 
 
@@ -120,12 +143,13 @@ def issue_native_location_token(uid: int, action: str, latitude: float, longitud
     try:
         uid = int(uid)
         latitude, longitude = float(latitude), float(longitude)
-        accuracy_m, distance_m, radius_m = float(accuracy_m), float(distance_m), float(radius_m)
+        distance_m, radius_m = float(distance_m), float(radius_m)
     except (TypeError, ValueError, OverflowError):
         raise ValueError("invalid native location")
+    accuracy_m = _optional_accuracy(accuracy_m)
     if action not in ALLOWED_ACTIONS or not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
         raise ValueError("invalid native location")
-    if not all(math.isfinite(value) for value in (latitude, longitude, accuracy_m, distance_m, radius_m)):
+    if not all(math.isfinite(value) for value in (latitude, longitude, distance_m, radius_m)):
         raise ValueError("invalid native location")
     if classify_location(distance_m, accuracy_m, radius_m) is not None:
         raise ValueError("native location is not verified")
@@ -155,26 +179,48 @@ def consume_native_location_token(uid: int, action: str, token: str,
     return {key: value for key, value in grant.items() if key != "expires"}
 
 
-def detect_face_liveness(frame_paths: list[str | Path]) -> bool:
-    """Prototype-only Haar face presence/motion check; not certified liveness.
+def _detect_face_boxes(image, detectors) -> list[tuple[int, int, int, int]]:
+    """Return face boxes from frontal and (both-side) profile Haar cascades."""
+    import cv2
 
-    Requires faces in at least three frames and variation in their detected
-    bounding boxes. It is a lightweight signal, not anti-spoofing security.
+    gray = cv2.equalizeHist(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
+    height, width = gray.shape[:2]
+    min_side = max(48, int(min(width, height) * 0.12))
+    params = dict(scaleFactor=1.1, minNeighbors=4, minSize=(min_side, min_side))
+    frontal, profile = detectors
+    found = [tuple(int(v) for v in box) for box in frontal.detectMultiScale(gray, **params)]
+    if not found and profile is not None:
+        found = [tuple(int(v) for v in box) for box in profile.detectMultiScale(gray, **params)]
+        if not found:
+            # The profile cascade only finds faces turned one way; mirror for the other side.
+            mirrored = cv2.flip(gray, 1)
+            for x, y, w, h in profile.detectMultiScale(mirrored, **params):
+                found.append((int(width - x - w), int(y), int(w), int(h)))
+    return found
+
+
+def detect_face_liveness(frame_paths: list[str | Path]) -> bool:
+    """Prototype-only face presence/motion check; not certified liveness.
+
+    The user is asked to turn their head, so frontal-only detection misses the
+    turned frames. Frontal and profile cascades are combined; a face must be
+    found in at least MIN_FRAMES frames and its box must move between frames.
     """
     try:
         import cv2
         import numpy as np
-        detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        frontal = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        profile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+        if profile.empty():
+            profile = None
         boxes: list[tuple[int, int, int, int]] = []
         for path in frame_paths:
             image = cv2.imread(str(path))
             if image is None:
                 continue
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            found = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80))
-            if len(found):
-                x, y, w, h = max(found, key=lambda b: b[2] * b[3])
-                boxes.append((int(x), int(y), int(w), int(h)))
+            found = _detect_face_boxes(image, (frontal, profile))
+            if found:
+                boxes.append(max(found, key=lambda b: b[2] * b[3]))
         if len(boxes) < MIN_FRAMES:
             return False
         centers = np.array([(x + w / 2, y + h / 2, w, h) for x, y, w, h in boxes], dtype=float)
@@ -255,14 +301,14 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         data = verify_init_data(request.headers.get("X-Telegram-Init-Data", ""), token, now_epoch=clock())
         return int(data["user"]["id"]) if data else None
 
-    async def measure_location(lat: float, lon: float, accuracy_m: float):
+    async def measure_location(lat: float, lon: float, accuracy_m: float | None):
         try:
             distance = float(await invoke(distance_from_office, lat, lon))
         except Exception:
             return None, "location_unavailable"
         return distance, classify_location(distance, accuracy_m, office_radius_m)
 
-    def location_response(distance: float | None, accuracy_m: float, error: str | None = None):
+    def location_response(distance: float | None, accuracy_m: float | None, error: str | None = None):
         if error:
             status = 403 if error == "outside_office_radius" else 422 if error == "location_accuracy_insufficient" else 400
             payload: dict[str, Any] = {"error": error}
@@ -271,8 +317,9 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
             payload = {"ok": True}
         if distance is not None and math.isfinite(distance):
             payload["distance_m"] = round(distance)
-        if math.isfinite(accuracy_m) and 0 < accuracy_m <= MAX_LOCATION_ACCURACY_M:
-            payload["accuracy_m"] = round(accuracy_m)
+        accuracy = _optional_accuracy(accuracy_m)
+        if accuracy is not None and accuracy <= MAX_LOCATION_ACCURACY_M:
+            payload["accuracy_m"] = round(accuracy)
         return web.json_response(payload, status=status)
 
     async def location_check(request: web.Request):
@@ -293,9 +340,9 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         except (KeyError, ValueError, TypeError, OverflowError, json.JSONDecodeError):
             return web.json_response({"error": "invalid_location"}, status=400)
         try:
-            accuracy_m = float(values["accuracy_m"])
-        except (KeyError, ValueError, TypeError, OverflowError):
-            accuracy_m = math.nan
+            accuracy_m = _optional_accuracy(values.get("accuracy_m"))
+        except (ValueError, TypeError, OverflowError):
+            accuracy_m = None
         distance, error = await measure_location(lat, lon, accuracy_m)
         return location_response(distance, accuracy_m, error)
 
@@ -354,7 +401,8 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
             "challenge_id": cid,
             "instruction": f"Kameraga qarab boshingizni {direction_uz} buring, so‘ng yana kameraga qarang.",
             "expires_in": CHALLENGE_TTL, "location_verified": True,
-            "distance_m": round(distance), "accuracy_m": round(grant["accuracy_m"]),
+            "distance_m": round(distance),
+            "accuracy_m": round(grant["accuracy_m"]) if grant["accuracy_m"] is not None else None,
         })
 
     async def attendance(request: web.Request):

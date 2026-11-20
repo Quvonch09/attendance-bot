@@ -290,26 +290,32 @@ class SecurityCoreTests(unittest.TestCase):
         self.assertEqual(bot.GEOFENCE_METERS, 100.0)
         self.assertEqual((bot.OFFICE_LAT, bot.OFFICE_LON), (38.8557873, 65.8002788))
         self.assertIsNone(bot.classify_telegram_location(70.0, 20.0))
-        self.assertEqual(bot.classify_telegram_location(95.0, 10.0), "location_accuracy_insufficient")
+        # Inside 100 m is accepted even when indoor GPS reports a wide accuracy circle.
+        self.assertIsNone(bot.classify_telegram_location(95.0, 10.0))
+        self.assertIsNone(bot.classify_telegram_location(60.0, 65.0))
+        self.assertIsNone(bot.classify_telegram_location(100.0, 5.0))
         self.assertEqual(bot.classify_telegram_location(120.0, 10.0), "outside_office_radius")
-        self.assertEqual(bot.classify_telegram_location(70.0, None), "location_accuracy_insufficient")
+        self.assertEqual(bot.classify_telegram_location(100.5, None), "outside_office_radius")
+        # Telegram often omits horizontal_accuracy; that alone must not block attendance.
+        self.assertIsNone(bot.classify_telegram_location(70.0, None))
 
     def test_telegram_accuracy_retry_message_is_neutral_and_actionable(self):
         missing = bot.telegram_location_accuracy_retry_message(None)
         self.assertIn("aniqlik qiymatini bermadi", missing)
-        self.assertIn("100 m hududidan tashqaridasiz degani emas", missing)
         self.assertIn("Joriy lokatsiyani yuborish", missing)
         self.assertNotIn("radiusidan tashqarida", missing)
 
         uncertain = bot.telegram_location_accuracy_retry_message(200)
         self.assertIn("±200 m", uncertain)
-        self.assertIn("100 m hududidan tashqaridasiz degani emas", uncertain)
 
     def test_location_accuracy_classification_is_conservative(self):
         self.assertIsNone(classify_location(70, 20, 100))
-        self.assertEqual(classify_location(95, 10, 100), "location_accuracy_insufficient")
+        self.assertIsNone(classify_location(95, 10, 100))
+        self.assertIsNone(classify_location(50, 80, 100))
         self.assertEqual(classify_location(120, 10, 100), "outside_office_radius")
-        self.assertEqual(classify_location(90, 0, 100), "location_accuracy_insufficient")
+        self.assertEqual(classify_location(130, 50, 100), "outside_office_radius")
+        self.assertIsNone(classify_location(90, 0, 100))
+        self.assertIsNone(classify_location(90, None, 100))
         self.assertEqual(classify_location(90, 100_001, 100), "location_accuracy_insufficient")
 
     def test_haversine_uses_latitude_longitude_order_and_returns_meters(self):
@@ -344,10 +350,10 @@ class SecurityCoreTests(unittest.TestCase):
                 self.assertEqual(inside.status, 200)
                 self.assertEqual(await inside.json(), {"ok": True, "distance_m": 70, "accuracy_m": 20})
 
-                uncertain = await client.post("/api/location-check", headers=headers,
-                                              json={"latitude": 2.0, "longitude": 2.0, "accuracy_m": 10})
-                self.assertEqual(uncertain.status, 422)
-                self.assertEqual((await uncertain.json())["error"], "location_accuracy_insufficient")
+                edge = await client.post("/api/location-check", headers=headers,
+                                         json={"latitude": 2.0, "longitude": 2.0, "accuracy_m": 10})
+                self.assertEqual(edge.status, 200)
+                self.assertEqual((await edge.json())["distance_m"], 95)
 
                 outside = await client.post("/api/location-check", headers=headers,
                                             json={"latitude": 3.0, "longitude": 2.0,
@@ -360,8 +366,8 @@ class SecurityCoreTests(unittest.TestCase):
 
                 missing_accuracy = await client.post("/api/location-check", headers=headers,
                                                      json={"latitude": 4.0, "longitude": 2.0})
-                self.assertEqual(missing_accuracy.status, 422)
-                self.assertEqual((await missing_accuracy.json())["error"], "location_accuracy_insufficient")
+                self.assertEqual(missing_accuracy.status, 200)
+                self.assertEqual(await missing_accuracy.json(), {"ok": True, "distance_m": 70})
 
         asyncio.run(scenario())
 
@@ -405,9 +411,9 @@ class SecurityCoreTests(unittest.TestCase):
                         form.add_field("frames", b"test-frame", filename=f"frame-{index}.jpg", content_type="image/jpeg")
                     return await client.post("/api/attendance", data=form, headers=headers)
 
-                uncertain = await issue_challenge(20, distance_after_challenge=95.0)
-                self.assertEqual(uncertain.status, 422)
-                self.assertEqual((await uncertain.json())["error"], "location_accuracy_insufficient")
+                moved_out = await issue_challenge(20, distance_after_challenge=130.0)
+                self.assertEqual(moved_out.status, 403)
+                self.assertEqual((await moved_out.json())["error"], "outside_office_radius")
                 self.assertEqual(recorded, [])
 
                 accepted = await issue_challenge(20)

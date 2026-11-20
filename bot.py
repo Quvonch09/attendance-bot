@@ -7,6 +7,7 @@ import random
 import shutil
 import sqlite3
 import tempfile
+import threading
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -357,10 +358,9 @@ def telegram_location_accuracy_retry_message(accuracy_m: float | None) -> str:
     else:
         accuracy_text = " Telegram bu safar aniqlik qiymatini bermadi."
     return (
-        "Joylashuv aniqligini tasdiqlab bo‘lmadi."
-        f"{accuracy_text} Bu siz ofisning 100 m hududidan tashqaridasiz degani emas. "
-        "Davomat qayd etilmadi. Ofis podvalda bo‘lgani uchun GPS binoda xato bo‘lishi mumkin: "
-        "Joylashuv va Aniq joylashuv ruxsatini yoqing, kirish eshigiga yaqin yoki ochiq joyda "
+        "Telegram yuborgan lokatsiya juda noaniq."
+        f"{accuracy_text} Davomat qayd etilmadi. "
+        "Joylashuv va Aniq joylashuv ruxsatini yoqing, kirish eshigiga yaqin joyda "
         "Telegram’dagi «Joriy lokatsiyani yuborish» tugmasini qayta bosing."
     )
 
@@ -615,23 +615,100 @@ async def download_file(bot: Bot, file_id: str, suffix: str) -> Path:
     return target
 
 
+FACE_MODEL_NAME = "Facenet512"
+# opencv is fast but misses many real faces (angle, low light); retinaface (ships with deepface) and
+# mtcnn (if installed) are used as fallbacks.
+FACE_DETECTOR_BACKENDS = ("opencv", "retinaface", "mtcnn")
+_FACE_LOCK = threading.Lock()
+
+
+def _face_verify_sync(reference: str | Path, candidate: str | Path) -> bool:
+    from deepface import DeepFace
+    import cv2
+
+    image = cv2.imread(str(candidate))
+    if image is None:
+        return False
+    # Web App frames are mirrored like a selfie preview, while the enrollment
+    # photo may not be; try both orientations of the candidate frame.
+    variants = (image, cv2.flip(image, 1))
+    with _FACE_LOCK:
+        for backend in FACE_DETECTOR_BACKENDS:
+            faces_found = False
+            for variant in variants:
+                try:
+                    result = DeepFace.verify(
+                        img1_path=str(reference),
+                        img2_path=variant,
+                        model_name=FACE_MODEL_NAME,
+                        detector_backend=backend,
+                        enforce_detection=True,
+                        align=True,
+                        silent=True,
+                    )
+                except ValueError:
+                    # A face was not detected in one of the images by this backend.
+                    continue
+                except Exception as exc:
+                    LOG.warning("Face detector %s unavailable or failed: %s", backend, exc)
+                    break
+                faces_found = True
+                if result.get("verified"):
+                    return True
+            if faces_found:
+                # Both faces were found and compared: this is a real mismatch.
+                return False
+    LOG.info("No face detected by any backend in %s or the enrollment photo", candidate)
+    return False
+
+
 async def compare_face(reference: str | Path, candidate: str | Path) -> bool:
     """Local DeepFace comparison. Model weights are downloaded on first use."""
     try:
-        from deepface import DeepFace
-        result = await asyncio.to_thread(
-            DeepFace.verify,
-            img1_path=str(reference),
-            img2_path=str(candidate),
-            model_name="Facenet512",
-            detector_backend="opencv",
-            enforce_detection=True,
-            silent=True,
-        )
-        return bool(result.get("verified"))
+        return await asyncio.to_thread(_face_verify_sync, reference, candidate)
     except Exception as exc:
         LOG.exception("Face comparison failed: %s", exc)
         return False
+
+
+def _image_has_single_face_sync(path: str | Path) -> bool | None:
+    """True/False when a detector ran; None when DeepFace itself is unavailable."""
+    try:
+        from deepface import DeepFace
+    except Exception:
+        return None
+    with _FACE_LOCK:
+        for backend in FACE_DETECTOR_BACKENDS:
+            try:
+                faces = DeepFace.extract_faces(img_path=str(path), detector_backend=backend, enforce_detection=True, align=True)
+            except ValueError:
+                continue
+            except Exception as exc:
+                LOG.warning("Face detector %s unavailable or failed: %s", backend, exc)
+                continue
+            confident = [face for face in faces if float(face.get("confidence") or 0) >= 0.5] or faces
+            return len(confident) == 1
+    return False
+
+
+async def enrollment_photo_has_face(path: str | Path) -> bool:
+    try:
+        result = await asyncio.to_thread(_image_has_single_face_sync, path)
+    except Exception:
+        LOG.exception("Enrollment face check failed")
+        return True
+    return True if result is None else result
+
+
+def warm_up_face_model():
+    """Load the face model once at start-up so the first check-in is not slow."""
+    try:
+        from deepface import DeepFace
+        with _FACE_LOCK:
+            DeepFace.build_model(FACE_MODEL_NAME)
+        LOG.info("Face model %s loaded", FACE_MODEL_NAME)
+    except Exception as exc:
+        LOG.warning("Face model warm-up failed (will retry on first use): %s", exc)
 
 
 def basic_motion_liveness(video_path: str | Path) -> bool:
@@ -677,15 +754,20 @@ def basic_motion_liveness(video_path: str | Path) -> bool:
         return False
 
 
-async def save_enrollment_photo(bot: Bot, message: Message, full_name: str, consent_at: str):
+async def save_enrollment_photo(bot: Bot, message: Message, full_name: str, consent_at: str) -> bool:
     photo = message.photo[-1]
     path = FACES_DIR / f"{message.from_user.id}.jpg"
+    candidate = TMP_DIR / f"enroll-{message.from_user.id}-{random.randrange(10**12)}.jpg"
     file = await bot.get_file(photo.file_id)
-    await bot.download_file(file.file_path, destination=path)
+    await bot.download_file(file.file_path, destination=candidate)
     try:
-        os.chmod(path, 0o600)
+        os.chmod(candidate, 0o600)
     except OSError:
         pass
+    if not await enrollment_photo_has_face(candidate):
+        candidate.unlink(missing_ok=True)
+        return False
+    os.replace(candidate, path)
     with db_connect() as con:
         con.execute(
             "INSERT INTO users(telegram_id,full_name,face_path,consent_at,created_at,active,approved) VALUES(?,?,?,?,?,1,0) "
@@ -693,6 +775,7 @@ async def save_enrollment_photo(bot: Bot, message: Message, full_name: str, cons
             (message.from_user.id, full_name, str(path), consent_at, stamp()),
         )
     clear_pending(message.from_user.id)
+    return True
 
 
 def format_name(user_row):
@@ -1125,7 +1208,8 @@ async def main():
             if not state or state["task"] != "webapp_attendance" or state["step"] != "location":
                 await message.answer("Avval kerakli davomat amalini tanlang, keyin shu chatdagi joriy lokatsiya tugmasidan foydalaning.", reply_markup=main_keyboard(uid))
                 return
-            if getattr(message.chat.type, "value", message.chat.type) != "private" or getattr(message, "forward_origin", None):
+            if (getattr(message.chat.type, "value", message.chat.type) != "private" or getattr(message, "forward_origin", None)
+                    or getattr(message, "venue", None)):
                 await message.answer("Faqat bot bilan shaxsiy chatdan yuborilgan, boshqa chatdan ko‘chirilmagan joriy lokatsiya qabul qilinadi.", reply_markup=location_keyboard())
                 return
             if not await require_approved(message):
@@ -1225,7 +1309,9 @@ async def main():
                 await message.answer("Ro‘yxatdan o‘tishda muammo bo‘ldi. Qayta /start bosing.")
                 clear_pending(uid)
                 return
-            await save_enrollment_photo(message.bot, message, full_name, state["payload"].get("consent_at", stamp()))
+            if not await save_enrollment_photo(message.bot, message, full_name, state["payload"].get("consent_at", stamp())):
+                await message.answer("Suratda bitta yuz aniq topilmadi. Yorug‘ joyda, yuzingiz to‘liq va to‘g‘ri ko‘rinadigan (ko‘zoynak/niqobsiz) yangi selfi yuboring.")
+                return
             await message.answer("Ro‘yxat ma’lumotlaringiz va yuz suratingiz adminlarga bir martalik tasdiq uchun yuborildi. Tasdiqlangach bot sizga xabar beradi.", reply_markup=ReplyKeyboardRemove())
             await send_face_review(message.bot, get_any_user(uid))
             return
@@ -1409,6 +1495,7 @@ async def main():
 
     api_runner = None
     scheduler_task = asyncio.create_task(scheduler(bot))
+    warmup_task = asyncio.create_task(asyncio.to_thread(warm_up_face_model))
     try:
         if WEBAPP_API_ENABLED:
             parsed_url = urlsplit(WEBAPP_URL)
