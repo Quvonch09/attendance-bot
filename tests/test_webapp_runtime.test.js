@@ -217,8 +217,8 @@ async function checkSuccessfulFlow(environment, {automatic = false} = {}) {
   assert.match(environment.elements.get('location-status').textContent, /Telegram chatidagi lokatsiya tasdiqlandi/);
   assert.match(environment.elements.get('capture-status').textContent, /Server tasdiqladi/);
   assert.equal(environment.canvasDraws(), 5, 'five frames are automatically captured after face alignment and movement');
-  assert.equal(environment.detectorFrames() >= 7, true, 'the detector checks face position and visible movement');
-  assert.deepEqual(environment.canvasSizes[0], {width: 720, height: 405, type: 'image/jpeg', quality: 0.72});
+  assert.equal(environment.detectorFrames() >= 6, true, 'the detector checks face position and visible movement');
+  assert.deepEqual(environment.canvasSizes[0], {width: 480, height: 270, type: 'image/jpeg', quality: 0.8});
   assert.equal(environment.scheduledDelays.includes(3000), false, 'there is no three-second countdown');
   assert.equal(environment.attendanceForms[0].filter((field) => field.name === 'frames').length, 5);
   assert.equal(environment.challengeBodies[0].native_location_token, 'opaque-one-use-token');

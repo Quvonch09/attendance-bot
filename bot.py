@@ -622,43 +622,94 @@ FACE_DETECTOR_BACKENDS = ("opencv", "retinaface", "mtcnn")
 _FACE_LOCK = threading.Lock()
 
 
-def _face_verify_sync(reference: str | Path, candidate: str | Path) -> bool:
+_REFERENCE_EMBEDDINGS: dict[str, tuple[float, object]] = {}
+_FACE_THRESHOLD: float | None = None
+
+
+def _face_threshold() -> float:
+    global _FACE_THRESHOLD
+    if _FACE_THRESHOLD is None:
+        try:
+            from deepface.modules.verification import find_threshold
+            _FACE_THRESHOLD = float(find_threshold(FACE_MODEL_NAME, "cosine"))
+        except Exception:
+            _FACE_THRESHOLD = 0.30  # DeepFace's tuned Facenet512 cosine threshold
+    return _FACE_THRESHOLD
+
+
+def _largest_face_embedding(image, backend: str):
+    """Embedding of the largest face, or raise ValueError when no face is found."""
     from deepface import DeepFace
+    import numpy as np
+
+    faces = DeepFace.represent(
+        img_path=image, model_name=FACE_MODEL_NAME, detector_backend=backend,
+        enforce_detection=True, align=True,
+    )
+    if not faces:
+        raise ValueError("no face")
+    def area(face):
+        box = face.get("facial_area") or {}
+        return float(box.get("w") or 0) * float(box.get("h") or 0)
+    vector = np.asarray(max(faces, key=area)["embedding"], dtype=float)
+    return vector / (np.linalg.norm(vector) or 1.0)
+
+
+def _reference_embedding(reference: str | Path):
+    """Cached embedding of the enrolled photo (it was recomputed on every check-in)."""
+    key = str(reference)
+    try:
+        mtime = os.path.getmtime(key)
+    except OSError:
+        return None
+    cached = _REFERENCE_EMBEDDINGS.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    for backend in FACE_DETECTOR_BACKENDS:
+        try:
+            vector = _largest_face_embedding(key, backend)
+        except ValueError:
+            continue
+        except Exception as exc:
+            LOG.warning("Face detector %s unavailable or failed: %s", backend, exc)
+            continue
+        _REFERENCE_EMBEDDINGS[key] = (mtime, vector)
+        return vector
+    LOG.warning("No face detected in enrollment photo %s", key)
+    return None
+
+
+def _face_verify_sync(reference: str | Path, candidate: str | Path) -> bool:
     import cv2
+    import numpy as np
 
     image = cv2.imread(str(candidate))
     if image is None:
         return False
-    # Web App frames are mirrored like a selfie preview, while the enrollment
-    # photo may not be; try both orientations of the candidate frame.
-    variants = (image, cv2.flip(image, 1))
+    threshold = _face_threshold()
     with _FACE_LOCK:
+        enrolled = _reference_embedding(reference)
+        if enrolled is None:
+            return False
         for backend in FACE_DETECTOR_BACKENDS:
             faces_found = False
-            for variant in variants:
+            # Web App frames are mirrored like a selfie preview, while the
+            # enrollment photo may not be; the flip is only tried if needed.
+            for flipped in (False, True):
+                variant = cv2.flip(image, 1) if flipped else image
                 try:
-                    result = DeepFace.verify(
-                        img1_path=str(reference),
-                        img2_path=variant,
-                        model_name=FACE_MODEL_NAME,
-                        detector_backend=backend,
-                        enforce_detection=True,
-                        align=True,
-                        silent=True,
-                    )
+                    vector = _largest_face_embedding(variant, backend)
                 except ValueError:
-                    # A face was not detected in one of the images by this backend.
                     continue
                 except Exception as exc:
                     LOG.warning("Face detector %s unavailable or failed: %s", backend, exc)
                     break
                 faces_found = True
-                if result.get("verified"):
+                if 1.0 - float(np.dot(enrolled, vector)) <= threshold:
                     return True
             if faces_found:
-                # Both faces were found and compared: this is a real mismatch.
                 return False
-    LOG.info("No face detected by any backend in %s or the enrollment photo", candidate)
+    LOG.info("No face detected by any backend in %s", candidate)
     return False
 
 
@@ -706,7 +757,9 @@ def warm_up_face_model():
         from deepface import DeepFace
         with _FACE_LOCK:
             DeepFace.build_model(FACE_MODEL_NAME)
-        LOG.info("Face model %s loaded", FACE_MODEL_NAME)
+            for user in all_users():
+                _reference_embedding(user["face_path"])
+        LOG.info("Face model %s loaded and enrolled faces cached", FACE_MODEL_NAME)
     except Exception as exc:
         LOG.warning("Face model warm-up failed (will retry on first use): %s", exc)
 

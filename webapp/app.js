@@ -7,6 +7,8 @@
   if (user && user.first_name) $('greeting').textContent = `Xush kelibsiz, ${user.first_name}`;
   const api = String(window.ATTENDANCE_API_BASE || '').trim().replace(/\/$/, '');
   const FACE_DETECTION_VERSION = 'v0.4.1646425229';
+  // Smaller frames keep encoding, upload and server-side matching fast.
+  const CAPTURE_MAX_SIDE = 480, FRAME_INTERVAL_MS = 40, FRONTAL_FRAMES_NEEDED = 2;
   const launchParams = new URLSearchParams(String(window.location.hash || '').replace(/^#/, ''));
   let nativeLocationToken = launchParams.get('native_location_token') || '';
   const autoStart = launchParams.get('autostart') === '1';
@@ -169,7 +171,7 @@
     if (!box || !videoWidth || !videoHeight) return null;
     const x = Number(box.xCenter), y = Number(box.yCenter), width = Number(box.width), height = Number(box.height);
     if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
-    const scale = Math.min(1, 720 / Math.max(videoWidth, videoHeight));
+    const scale = Math.min(1, CAPTURE_MAX_SIDE / Math.max(videoWidth, videoHeight));
     return {centerX: x * videoWidth * scale, centerY: y * videoHeight * scale,
       faceWidth: width * videoWidth * scale, widthRatio: width, heightRatio: height,
       centerXRatio: x, centerYRatio: y, frameWidth: videoWidth * scale};
@@ -193,16 +195,17 @@
   function motionRangeExceeded(metrics){
     if (metrics.length < 2) return false;
     const centers = metrics.map(item => item.centerX), widths = metrics.map(item => item.faceWidth);
-    return Math.max(...centers) - Math.min(...centers) >= 24 || Math.max(...widths) - Math.min(...widths) >= 12;
+    const frame = metrics[0].frameWidth || CAPTURE_MAX_SIDE;
+    return Math.max(...centers) - Math.min(...centers) >= frame * 0.03 || Math.max(...widths) - Math.min(...widths) >= frame * 0.02;
   }
   function captureFrame(video, canvas, ctx){
     if (stopped) return Promise.reject(Error('Tekshiruv to‘xtatildi.'));
     ctx.save(); ctx.translate(canvas.width, 0); ctx.scale(-1, 1); ctx.drawImage(video, 0, 0, canvas.width, canvas.height); ctx.restore();
-    return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(Error('JPEG kadr tayyorlanmadi.')), 'image/jpeg', 0.72));
+    return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(Error('JPEG kadr tayyorlanmadi.')), 'image/jpeg', 0.8));
   }
   async function waitForFaceSequence(video, detector, sessionId){
     const sourceWidth = Number(video.videoWidth) || 640, sourceHeight = Number(video.videoHeight) || 480;
-    const scale = Math.min(1, 720 / Math.max(sourceWidth, sourceHeight));
+    const scale = Math.min(1, CAPTURE_MAX_SIDE / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(sourceWidth * scale)); canvas.height = Math.max(1, Math.round(sourceHeight * scale));
     const ctx = canvas.getContext('2d');
@@ -225,30 +228,27 @@
           if (missedFrames >= 2) resetAlignment();
           $('capture-status').textContent = 'Yuz topilmadi · yorug‘roq joyda kameraga qarang';
         }
-        await new Promise(resolve => setTimeout(resolve, 100)); continue;
+        await new Promise(resolve => setTimeout(resolve, FRAME_INTERVAL_MS)); continue;
       }
       missedFrames = 0;
       const detection = detections[0], metrics = faceMetrics(detection, video);
       if (!metrics || !faceIsPositioned(metrics)){
         resetAlignment(); $('capture-status').textContent = 'Yuzni oval ramkaning markaziga joylang';
-        await new Promise(resolve => setTimeout(resolve, 100)); continue;
+        await new Promise(resolve => setTimeout(resolve, FRAME_INTERVAL_MS)); continue;
       }
       if (!baseline){
         if (!faceIsFrontal(detection)){
           frontalFrames = 0; $('video-wrap').classList.remove('aligned'); $('capture-status').textContent = 'Yuzni kameraga to‘g‘ri qarating';
         } else {
           frontalFrames++;
-          if (frontalFrames >= 3){
+          if (frontalFrames >= FRONTAL_FRAMES_NEEDED){
             baseline = metrics; baselineBlob = await captureFrame(video, canvas, ctx); recent = [];
             $('video-wrap').classList.add('aligned'); $('capture-count').textContent = '1 / 5'; $('progress').style.width = '20%';
             $('capture-status').textContent = 'Yuz joyida · ko‘rsatilgan tomonga sekin buring';
           } else $('capture-status').textContent = 'Yuz aniqlandi · markazda va kameraga qarab turing';
         }
       } else {
-        const movedBeforeSample = motionRangeExceeded([baseline, ...recent.map(item => item.metrics), metrics]);
-        if (iteration % 2 === 0 || movedBeforeSample){
-          const blob = await captureFrame(video, canvas, ctx); recent.push({metrics, blob}); if (recent.length > 4) recent.shift();
-        }
+        const blob = await captureFrame(video, canvas, ctx); recent.push({metrics, blob}); if (recent.length > 4) recent.shift();
         const moved = motionRangeExceeded([baseline, ...recent.map(item => item.metrics), metrics]);
         $('capture-count').textContent = `${Math.min(5, recent.length + 1)} / 5`;
         $('progress').style.width = `${Math.min(100, (recent.length + 1) * 20)}%`;
@@ -258,7 +258,7 @@
         }
         $('capture-status').textContent = moved ? 'Harakat sezildi · kadrlar ketma-ketligi olinmoqda…' : 'Yuz joyida · ko‘rsatilgan tomonga sekin buring';
       }
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, FRAME_INTERVAL_MS));
     }
     throw faceError('Yuz ramkada barqaror ko‘rinmadi yoki harakat topshirig‘i bajarilmadi. Yuzni markazga joylab, ko‘rsatilgan tomonga sekin buring va qayta urinib ko‘ring.', 'FaceAlignmentTimeoutError');
   }
@@ -406,5 +406,10 @@
   if (!initData) setNotice('Telegram Mini App ichida oching. Brauzer preview rejimi autentifikatsiya qilmaydi va check-in yubora olmaydi.', 'error');
   else if (!api) setNotice('API ulanishi sozlanmagan: webapp/config.js faylida ATTENDANCE_API_BASE qiymatini kiriting.', 'error');
   else if (!nativeLocationToken) setNotice('Bot chatiga qayting, davomat amalini tanlang va Telegram joriy lokatsiyasini yuboring.', 'error');
-  else if (autoStart) { $('start-button').textContent = 'Kamera avtomatik ochilmoqda…'; void start(); }
+  // Load the face model immediately so it is ready by the time the camera opens.
+  if (initData && nativeLocationToken && !faceDetectorPromise) {
+    const preload = createFaceDetector(); faceDetectorPromise = preload;
+    preload.then(detector => { if (faceDetectorPromise === preload) faceDetector = faceDetector || detector; }, () => { if (faceDetectorPromise === preload) faceDetectorPromise = null; });
+  }
+  if (initData && api && nativeLocationToken && autoStart) { $('start-button').textContent = 'Kamera avtomatik ochilmoqda…'; void start(); }
 })();
