@@ -351,6 +351,20 @@ def classify_telegram_location(distance_m: float, accuracy_m: float | None) -> s
     return classify_location(distance_m, accuracy_m, GEOFENCE_METERS)
 
 
+def telegram_location_accuracy_retry_message(accuracy_m: float | None) -> str:
+    if isinstance(accuracy_m, (int, float)) and not isinstance(accuracy_m, bool) and math.isfinite(accuracy_m) and accuracy_m > 0:
+        accuracy_text = f" Telegram bildirgan aniqlik taxminan ±{round(accuracy_m)} m."
+    else:
+        accuracy_text = " Telegram bu safar aniqlik qiymatini bermadi."
+    return (
+        "Joylashuv aniqligini tasdiqlab bo‘lmadi."
+        f"{accuracy_text} Bu siz ofisning 100 m hududidan tashqaridasiz degani emas. "
+        "Davomat qayd etilmadi. Ofis podvalda bo‘lgani uchun GPS binoda xato bo‘lishi mumkin: "
+        "Joylashuv va Aniq joylashuv ruxsatini yoqing, kirish eshigiga yaqin yoki ochiq joyda "
+        "Telegram’dagi «Joriy lokatsiyani yuborish» tugmasini qayta bosing."
+    )
+
+
 def main_keyboard(uid: int | None = None):
     keyboard = [
         [KeyboardButton(text="✅ Ishga keldim")],
@@ -1134,9 +1148,8 @@ async def main():
                 )
                 return
             if location_status == "location_accuracy_insufficient":
-                accuracy_text = f" Telegram bildirgan aniqlik ±{round(accuracy)} m." if isinstance(accuracy, (int, float)) and math.isfinite(accuracy) and accuracy > 0 else " Telegram bu lokatsiya uchun aniqlik qiymatini bermadi."
                 await message.answer(
-                    f"GPS aniqligi 100 m chegaraga nisbatan yetarli emas.{accuracy_text} Telegram lokatsiya tugmasidan qayta yuboring; noaniq o‘lchov bilan davomat qayd etilmaydi.",
+                    telegram_location_accuracy_retry_message(accuracy),
                     reply_markup=location_keyboard(),
                 )
                 return
@@ -1186,13 +1199,8 @@ async def main():
             )
             return
         if location_status == "location_accuracy_insufficient":
-            accuracy_text = (
-                f" Qurilma bildirgan GPS aniqligi taxminan ±{round(accuracy)} m."
-                if isinstance(accuracy, (int, float)) and math.isfinite(accuracy) and accuracy > 0
-                else " Telegram GPS aniqlik ma’lumotini bermadi yoki u yaroqsiz."
-            )
             await message.answer(
-                f"GPS aniqligi 100 m chegarasiga nisbatan noaniq.{accuracy_text} Ochiq eshikka yaqin, xavfsiz joyda 10–20 soniya kutib lokatsiyani qayta yuboring. Davomat qayd etilmadi.",
+                telegram_location_accuracy_retry_message(accuracy),
                 reply_markup=location_keyboard(),
             )
             return

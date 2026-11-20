@@ -35,7 +35,7 @@
     if (code === 'location_accuracy_insufficient'){
       const accuracy = Number(data.accuracy_m);
       const accuracyText = Number.isFinite(accuracy) && accuracy > 0 ? ` Telegram bildirgan aniqlik taxminan ±${Math.round(accuracy)} m.` : ' Telegram bu safar aniqlik qiymatini bermadi.';
-      return `Telegram chatdagi lokatsiya 100 m chegaraga nisbatan noaniq.${accuracyText} Bot chatiga qaytib joriy lokatsiyani qayta yuboring. Noaniq o‘lchov bilan davomat qayd etilmaydi.`;
+      return `Telegram lokatsiyasining aniqligini server tasdiqlay olmadi.${accuracyText} Bu siz ofisning 100 m hududidan tashqaridasiz degani emas. Davomat qayd etilmadi. Ofis podvalida GPS xato bo‘lishi mumkin; bot chatidagi «Joriy lokatsiyani yuborish» tugmasini kirish eshigiga yaqin yoki ochiq joyda qayta bosing.`;
     }
     if (code === 'outside_office_radius'){
       const distance = Number(data.distance_m);

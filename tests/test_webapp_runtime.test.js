@@ -253,7 +253,9 @@ test('server-side uncertain 100 m reading blocks camera and face capture', async
   assert.equal(environment.detectorFrames(), 0);
   assert.equal(environment.attendanceCalls(), 0);
   assert.match(environment.elements.get('notice').textContent, /100 m/i);
-  assert.match(environment.elements.get('notice').textContent, /noaniq/i);
+  assert.match(environment.elements.get('notice').textContent, /aniqligini server tasdiqlay olmadi/i);
+  assert.match(environment.elements.get('notice').textContent, /Bu siz ofisning 100 m hududidan tashqaridasiz degani emas/i);
+  assert.doesNotMatch(environment.elements.get('notice').textContent, /ofisning 100 m radiusidan tashqarida/i);
   assert.equal(environment.elements.get('video-wrap').classList.contains('confirmed'), false);
 });
 

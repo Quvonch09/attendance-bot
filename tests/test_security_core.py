@@ -294,6 +294,17 @@ class SecurityCoreTests(unittest.TestCase):
         self.assertEqual(bot.classify_telegram_location(120.0, 10.0), "outside_office_radius")
         self.assertEqual(bot.classify_telegram_location(70.0, None), "location_accuracy_insufficient")
 
+    def test_telegram_accuracy_retry_message_is_neutral_and_actionable(self):
+        missing = bot.telegram_location_accuracy_retry_message(None)
+        self.assertIn("aniqlik qiymatini bermadi", missing)
+        self.assertIn("100 m hududidan tashqaridasiz degani emas", missing)
+        self.assertIn("Joriy lokatsiyani yuborish", missing)
+        self.assertNotIn("radiusidan tashqarida", missing)
+
+        uncertain = bot.telegram_location_accuracy_retry_message(200)
+        self.assertIn("±200 m", uncertain)
+        self.assertIn("100 m hududidan tashqaridasiz degani emas", uncertain)
+
     def test_location_accuracy_classification_is_conservative(self):
         self.assertIsNone(classify_location(70, 20, 100))
         self.assertEqual(classify_location(95, 10, 100), "location_accuracy_insufficient")
