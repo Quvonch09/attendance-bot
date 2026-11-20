@@ -52,7 +52,7 @@ class WebAppPermissionFlowTests(unittest.TestCase):
         self.assertIn("return [baselineBlob, ...recent.map(item => item.blob)]", APP_JS)
         self.assertIn("await capture(frames, thisSession)", APP_JS)
         self.assertNotRegex(APP_JS, re.compile(r"setTimeout\([^\n]*,\s*3000\b"))
-        self.assertIn("Kadrlar kechiktiruvchi taymersiz avtomatik yuboriladi", APP_JS)
+        self.assertIn("Yuzni ramkaga joylang va boshingizni biroz buring.", APP_JS)
 
     def test_green_face_confirmation_requires_server_success(self):
         capture = APP_JS.split("async function capture(frames, sessionId)", 1)[1].split("$('action-select')", 1)[0]

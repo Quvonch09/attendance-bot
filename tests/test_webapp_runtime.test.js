@@ -282,7 +282,7 @@ test('movement-check failure is distinct and does not enable a second submission
   const environment = createWebView({platform: 'android', attendanceError: 'motion_check_failed'});
   await environment.elements.get('start-button').click();
   await waitUntil(() => environment.attendanceCalls() === 1, 'movement-check response');
-  assert.match(environment.elements.get('notice').textContent, /topshiriqdagi harakat/i);
+  assert.match(environment.elements.get('notice').textContent, /harakat sezilmadi/i);
   assert.equal(environment.elements.get('video-wrap').classList.contains('confirmed'), false);
   await environment.elements.get('retry-button').click();
   assert.equal(environment.challengeCalls(), 1);

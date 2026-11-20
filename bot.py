@@ -627,13 +627,20 @@ _FACE_THRESHOLD: float | None = None
 
 
 def _face_threshold() -> float:
+    """Cosine-distance limit for a match.
+
+    DeepFace's default for Facenet512 (0.30) rejected ~8% of genuine pairs even
+    on clean photos, and far more for front-camera frames vs. a Telegram selfie.
+    0.40 accepted every genuine pair in testing while the closest different
+    person was at 0.45 (typical strangers are 0.6-1.0). Override with
+    FACE_MATCH_THRESHOLD if needed.
+    """
     global _FACE_THRESHOLD
     if _FACE_THRESHOLD is None:
         try:
-            from deepface.modules.verification import find_threshold
-            _FACE_THRESHOLD = float(find_threshold(FACE_MODEL_NAME, "cosine"))
-        except Exception:
-            _FACE_THRESHOLD = 0.30  # DeepFace's tuned Facenet512 cosine threshold
+            _FACE_THRESHOLD = min(0.45, max(0.20, float(os.getenv("FACE_MATCH_THRESHOLD", "0.40"))))
+        except ValueError:
+            _FACE_THRESHOLD = 0.40
     return _FACE_THRESHOLD
 
 
@@ -705,7 +712,9 @@ def _face_verify_sync(reference: str | Path, candidate: str | Path) -> bool:
                     LOG.warning("Face detector %s unavailable or failed: %s", backend, exc)
                     break
                 faces_found = True
-                if 1.0 - float(np.dot(enrolled, vector)) <= threshold:
+                distance = 1.0 - float(np.dot(enrolled, vector))
+                LOG.info("Face distance %.3f (threshold %.2f, %s%s)", distance, threshold, backend, ", mirrored" if flipped else "")
+                if distance <= threshold:
                     return True
             if faces_found:
                 return False

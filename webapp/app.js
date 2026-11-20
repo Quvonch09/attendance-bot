@@ -1,7 +1,11 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const tg = window.Telegram && window.Telegram.WebApp;
-  if (tg) { tg.ready(); tg.expand(); }
+  if (tg) {
+    tg.ready(); tg.expand();
+    // Keep the single-screen layout fixed: no pull-to-close or page scrolling.
+    try { if (typeof tg.disableVerticalSwipes === 'function') tg.disableVerticalSwipes(); } catch (_) {}
+  }
   const initData = tg && typeof tg.initData === 'string' ? tg.initData : '';
   const user = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
   if (user && user.first_name) $('greeting').textContent = `Xush kelibsiz, ${user.first_name}`;
@@ -23,6 +27,8 @@
     const actionLabel = document.querySelector('label[for="action-select"]');
     if (actionLabel) actionLabel.textContent = 'Tanlangan davomat amali';
   }
+  const titles = {checkin:'Ishga kelish', lunch_out:'Tushlikka chiqish', lunch_in:'Tushlikdan qaytish', checkout:'Ishdan chiqish'};
+  if ($('action-title')) $('action-title').textContent = titles[$('action-select').value] || 'Davomat';
   const setNotice = (text, kind = '') => { const n = $('notice'); n.textContent = text; n.className = `notice ${kind}`.trim(); };
   const markDone = (id) => $(id).classList.add('done');
   const headers = () => ({'X-Telegram-Init-Data': initData});
@@ -53,8 +59,8 @@
       native_location_invalid:'Lokatsiya tasdiq kaliti muddati tugagan yoki ishlatilgan. Bot chatga qaytib joriy lokatsiyani qayta yuboring.',
       already_checked_in:'Bugungi kelishingiz avval qayd etilgan.', duplicate_action:'Bu amal bugun allaqachon qayd etilgan; qayta yuborib bo‘lmaydi.', sequence_invalid:'Oldingi davomat amali qayd etilmagan. Tushlikka chiqishdan oldin “Ishga kelish”, tushlikdan qaytishdan oldin “Tushlikka chiqish” qaydi bo‘lishi kerak.', invalid_action:'Noto‘g‘ri davomat amali.',
       late_reason_required:'09:30 dan keyin kelayotgan bo‘lsangiz, bot chatiga kechikish sababini matn yoki ovozda yuboring, keyin qayta urinib ko‘ring.',
-      motion_check_failed:'Yuz kadrda aniq ko‘rinmadi yoki topshiriqdagi harakat sezilmadi. Yuzni ramkada ushlab, ko‘rsatilgan tomonga sekin buring va yorug‘ joyda qayta urinib ko‘ring. Bu oddiy harakat tekshiruvi, sertifikatlangan liveness emas.',
-      face_match_failed:'Kadrdagi yuz tasdiqlangan profil suratiga mos kelmadi. Yuzni to‘liq va yorug‘ joyda ko‘rsating. Qaytalansa, administrator profil suratini tekshirsin.',
+      motion_check_failed:'Yuz aniq ko‘rinmadi yoki harakat sezilmadi. Yorug‘ joyda boshingizni biroz buring.',
+      face_match_failed:'Yuz profil suratiga mos kelmadi. Yorug‘ joyda, yuzni to‘liq ko‘rsatib qayta urining.',
       face_check_failed:'Yuz yoki harakat tekshiruvi o‘tmadi. Yuzni yaxshi yoritilgan joyda ko‘rsating va ko‘rsatilgan harakatni bajaring.',
       challenge_expired:'Harakat topshirig‘i muddati tugadi. Tekshiruvni qayta boshlang.',
       service_unavailable:'Davomat API hali sozlanmagan. Birozdan so‘ng qayta urinib ko‘ring.',
@@ -328,10 +334,9 @@
       if (!sessionActive(thisSession)) return;
       if (!hasLiveCamera()) { const error = Error('Kamera oqimi qurilma tomonidan to‘xtatildi.'); error.name = 'CameraStreamEndedError'; error.cameraFailure = true; throw error; }
       $('camera-placeholder').hidden = true; $('video-wrap').classList.add('ready'); $('camera-status').textContent = 'Old kamera tayyor'; markDone('step-camera'); $('stop-button').hidden = false;
-      setNotice('Lokatsiya serverda tasdiqlandi. Yuzingizni ramkaga joylang va ko‘rsatilgan harakatni bajaring.');
       $('start-button').hidden = true; $('capture-button').hidden = true; $('capture-button').disabled = true; $('retry-button').hidden = true;
       $('capture-count').textContent = '0 / 5'; $('capture-status').textContent = 'Yuz aniqlash moduli ishga tushmoqda…'; $('progress').style.width = '0';
-      setNotice('Yuzingizni oval ramkaga joylang va ko‘rsatilgan tomonga sekin buring. Kadrlar kechiktiruvchi taymersiz avtomatik yuboriladi.');
+      setNotice('Yuzni ramkaga joylang va boshingizni biroz buring.');
       const detector = await ensureFaceDetector(thisSession);
       if (!sessionActive(thisSession) || !detector) return;
       const frames = await waitForFaceSequence(video, detector, thisSession);
@@ -355,7 +360,7 @@
     busy = true; $('capture-button').disabled = true; $('stop-button').hidden = false;
     try {
       $('capture-count').textContent = `${frames.length} / 5`; $('capture-status').textContent = 'Serverga yuborilmoqda…'; $('progress').style.width = '100%';
-      setNotice('Kadrlar serverga yuborilmoqda; yuz va harakat serverda tekshiriladi.');
+      setNotice('Yuz tekshirilmoqda…');
       const form = new FormData();
       form.append('challenge_id', challenge.challenge_id); form.append('action', action());
       frames.forEach((blob, index) => form.append('frames', blob, `frame-${index + 1}.jpg`));

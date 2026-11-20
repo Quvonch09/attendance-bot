@@ -2,39 +2,57 @@
 <html lang="uz">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f5f7fb">
-  <title>Davomat — check-in</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0f1724">
+  <title>Davomat</title>
   <link rel="stylesheet" href="styles.css">
-  <style>
-    .video-wrap.aligned:not(.confirmed) .face-guide{display:block;border:2px solid #66a5ff;border-style:solid;box-shadow:0 0 0 999px rgba(72,130,255,.06)}
-    .video-wrap.aligned:not(.confirmed):after{content:'YUZ KADRDA';position:absolute;right:12px;top:12px;padding:7px 10px;border-radius:999px;background:#2d6eea;color:#fff;font-size:10px;font-weight:800;letter-spacing:.04em}
-  </style>
   <script src="config.js"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script defer src="/face-detection/v0.4.1646425229/face_detection.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
-  <main class="shell">
-    <header class="topbar"><div class="brand-mark" aria-hidden="true">D</div><div><p class="eyebrow">ISH VAQTI</p><h1>Davomat</h1></div><span class="secure-pill">● Xavfsiz ulanish</span></header>
-    <section class="welcome"><p class="eyebrow">BUGUNGI QATNOV</p><h2 id="greeting">Xush kelibsiz</h2><p class="muted">Ofisda ekaningizni tasdiqlash uchun qadamlarni bajaring.</p></section>
-    <div id="notice" class="notice" role="status" aria-live="polite">Avval Telegram chatidagi joriy lokatsiya serverda tekshiriladi; so‘ng yuz va harakat tasdiqlanadi.</div>
-    <section class="card"><label for="action-select"><strong>Davomat amalini tanlang</strong></label><select id="action-select" class="button" style="width:100%;margin-top:10px"><option value="checkin">✅ Ishga kelish</option><option value="lunch_out">🍽 Tushlikka chiqish</option><option value="lunch_in">🔙 Tushlikdan qaytish</option><option value="checkout">🏁 Ishdan chiqish</option></select><p class="muted">Telegram chatdagi lokatsiya 100 m chegarada serverda tekshiriladi. 09:30 dan keyingi kelish uchun bot chatida kechikish izohini yuboring.</p></section>
-    <section class="card steps-card" aria-label="Check-in qadamlar">
-      <div class="step" id="step-location"><div class="step-icon">⌖</div><div class="step-copy"><h3>Telegram lokatsiyasi</h3><p id="location-status">Bot chatidagi joriy lokatsiya serverda tekshiriladi</p></div><span class="step-state" id="location-state">1</span></div>
-      <div class="step" id="step-camera"><div class="step-icon">▣</div><div class="step-copy"><h3>Old kamera</h3><p id="camera-status">Lokatsiya tasdiqlangach kamera avtomatik ochiladi</p></div><span class="step-state" id="camera-state">2</span></div>
-      <div class="step" id="step-motion"><div class="step-icon">↔</div><div class="step-copy"><h3>Harakat tekshiruvi</h3><p id="motion-status">Oddiy harakat tekshiruvi · yuz serverda solishtiriladi</p></div><span class="step-state" id="motion-state">3</span></div>
+  <main class="app">
+    <header class="bar">
+      <div class="title">
+        <p id="greeting" class="greeting">Xush kelibsiz</p>
+        <h1 id="action-title">Davomat</h1>
+      </div>
+      <ol class="steps" aria-label="Qadamlar">
+        <li class="step" id="step-location">Joy</li>
+        <li class="step" id="step-camera">Kamera</li>
+        <li class="step" id="step-motion">Yuz</li>
+      </ol>
+    </header>
+
+    <section class="video-wrap" id="video-wrap">
+      <video id="video" autoplay muted playsinline webkit-playsinline></video>
+      <div class="camera-placeholder" id="camera-placeholder"><div class="camera-glyph">◉</div><span>Kamera ochilmoqda…</span></div>
+      <div class="face-guide" aria-hidden="true"></div>
+      <div class="overlay">
+        <strong id="instruction">Yuzingizni ramkaga joylang</strong>
+        <div class="meta"><span id="capture-status">Yuz kutilmoqda</span><span id="capture-count">0 / 5</span></div>
+        <div class="progress-track"><div id="progress" class="progress-fill"></div></div>
+      </div>
     </section>
-    <section class="card camera-card">
-      <div class="camera-head"><div><p class="eyebrow">KAMERA</p><h3>Yuzingizni kadrga joylang</h3></div><span class="live-tag"><i></i> LIVE</span></div>
-      <div class="video-wrap" id="video-wrap"><video id="video" autoplay muted playsinline webkit-playsinline></video><div class="camera-placeholder" id="camera-placeholder"><div class="camera-glyph">◉</div><strong>Kamera hali yoqilmagan</strong><span>Telegram lokatsiyasi tasdiqlangach kamera avtomatik so‘raladi; qurilma ruxsat so‘rasa, bering</span></div><div class="face-guide" aria-hidden="true"></div></div>
-      <div class="challenge" id="challenge-box"><span class="challenge-icon">✦</span><div><small>HARAKAT TOPSHIRIG‘I</small><strong id="instruction">Topshiriq kamera yoqilgach chiqadi</strong></div></div>
-      <div class="capture-meta"><span id="capture-status">Yuz ramkaga joylashgach 5 kadr avtomatik olinadi</span><span id="capture-count">0 / 5</span></div><div class="progress-track"><div id="progress" class="progress-fill"></div></div>
-      <div class="actions"><button id="start-button" class="button primary">Tekshiruvni boshlash <span>→</span></button><button id="capture-button" class="button primary" hidden>Kadrlarni olish <span>→</span></button><button id="retry-button" class="button secondary" hidden>Qayta urinish</button><button id="stop-button" class="button text-button" hidden>To‘xtatish</button></div>
-      <p class="privacy-note">Telegram chatdagi lokatsiya serverda tekshirilgach kamera avtomatik ochilishi so‘raladi; iOS yoki qurilma ruxsat uchun qo‘shimcha tasdiq talab qilishi mumkin. Kadrlar faqat davomat uchun serverga yuboriladi; serverdagi yuz va oddiy harakat tekshiruvi saqlanadi. Bu sertifikatlangan liveness tizimi emas.</p>
-    </section>
-    <footer>Muammo bormi? Rahbaringiz yoki administratorga murojaat qiling.</footer>
+
+    <div id="notice" class="notice" role="status" aria-live="polite">Telegram chatdagi lokatsiya tekshirilmoqda…</div>
+
+    <div class="actions">
+      <button id="start-button" class="button primary">Boshlash</button>
+      <button id="capture-button" class="button primary" hidden>Kadrlarni olish</button>
+      <button id="retry-button" class="button secondary" hidden>Qayta urinish</button>
+      <button id="stop-button" class="button text-button" hidden>To‘xtatish</button>
+    </div>
+
+    <!-- Internal state used by app.js; not shown, so the screen never needs scrolling. -->
+    <div class="hidden-state" hidden>
+      <label for="action-select">Davomat amali</label>
+      <select id="action-select"><option value="checkin">Ishga kelish</option><option value="lunch_out">Tushlikka chiqish</option><option value="lunch_in">Tushlikdan qaytish</option><option value="checkout">Ishdan chiqish</option></select>
+      <p id="location-status">Telegram chatdagi lokatsiya serverda tekshiriladi</p>
+      <p id="camera-status"></p>
+      <p id="motion-status"></p>
+    </div>
   </main>
 </body>
 </html>

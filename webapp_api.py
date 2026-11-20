@@ -399,7 +399,7 @@ def build_api_app(*, token: str, allowed_origin: str | None, office_lat: float,
         direction_uz = "chapga" if direction == "left" else "o‘ngga"
         return web.json_response({
             "challenge_id": cid,
-            "instruction": f"Kameraga qarab boshingizni {direction_uz} buring, so‘ng yana kameraga qarang.",
+            "instruction": f"Kameraga qarang va boshingizni biroz {direction_uz} buring",
             "expires_in": CHALLENGE_TTL, "location_verified": True,
             "distance_m": round(distance),
             "accuracy_m": round(grant["accuracy_m"]) if grant["accuracy_m"] is not None else None,
