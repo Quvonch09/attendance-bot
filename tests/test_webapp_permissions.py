@@ -22,7 +22,7 @@ class WebAppPermissionFlowTests(unittest.TestCase):
     def test_launch_token_is_read_from_fragment_and_camera_auto_start_has_manual_fallback(self):
         self.assertIn("window.location.hash", APP_JS)
         self.assertIn("native_location_token", APP_JS)
-        self.assertIn("else if (autoStart)", APP_JS)
+        self.assertIn("nativeLocationToken && autoStart)", APP_JS)
         self.assertIn("Kamera avtomatik ochilmoqda", APP_JS)
         self.assertIn("Kamerani qayta ochish", APP_JS)
         self.assertIn("NotAllowedError", APP_JS)
@@ -46,7 +46,8 @@ class WebAppPermissionFlowTests(unittest.TestCase):
         self.assertNotIn("cdn.jsdelivr.net", APP_JS)
 
     def test_capture_is_automatic_after_framing_and_motion_without_a_countdown(self):
-        self.assertIn("frontalFrames >= 3", APP_JS)
+        self.assertIn("frontalFrames >= FRONTAL_FRAMES_NEEDED", APP_JS)
+        self.assertIn("FRONTAL_FRAMES_NEEDED = 2", APP_JS)
         self.assertIn("motionRangeExceeded", APP_JS)
         self.assertIn("return [baselineBlob, ...recent.map(item => item.blob)]", APP_JS)
         self.assertIn("await capture(frames, thisSession)", APP_JS)
